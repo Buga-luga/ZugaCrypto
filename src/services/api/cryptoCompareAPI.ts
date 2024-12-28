@@ -1,5 +1,10 @@
 import { Time, UTCTimestamp } from 'lightweight-charts';
 
+// WARNING: This is the production Bitcoin price feed implementation.
+// This file contains critical real-time data functionality.
+// DO NOT modify this implementation or replace it with sample data.
+// The WebSocket connection and historical data fetching are working correctly.
+
 interface PriceData {
   time: UTCTimestamp;
   value: number;
