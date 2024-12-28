@@ -1,32 +1,33 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { Strategy, StrategyId, getStrategies } from '@/services/strategies';
+import { useEffect } from 'react';
+import { StrategyId, getAllStrategies } from '@/services/strategies';
 
 interface StrategySelectorProps {
-  selectedStrategy: StrategyId;
-  onStrategyChange: (strategy: StrategyId) => void;
+  value: StrategyId;
+  onChange: (value: StrategyId) => void;
 }
 
-export function StrategySelector({ selectedStrategy, onStrategyChange }: StrategySelectorProps) {
-  const [availableStrategies, setAvailableStrategies] = useState<Strategy[]>([]);
-
+export function StrategySelector({ value, onChange }: StrategySelectorProps) {
   useEffect(() => {
     // Load strategies immediately
-    const strategies = getStrategies();
-    console.log('Available strategies:', strategies); // Debug log
-    setAvailableStrategies(strategies);
+    const strategies = getAllStrategies();
+    console.log('Available strategies:', strategies);
   }, []);
+
+  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    onChange(e.target.value as StrategyId);
+  };
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-gray-400">Strategy:</span>
+      <span className="text-gray-300">Strategy:</span>
       <select
-        value={selectedStrategy}
-        onChange={(e) => onStrategyChange(e.target.value as StrategyId)}
-        className="bg-[#1E222D] text-white border border-[#2B2B43] rounded px-3 py-2 focus:outline-none focus:border-[#758696]"
+        value={value}
+        onChange={handleChange}
+        className="bg-[#2B2B43] text-gray-300 px-2 py-1 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
       >
         <option value="none">No Strategy</option>
-        {availableStrategies.map((strategy) => (
+        {getAllStrategies().map((strategy) => (
           <option key={strategy.id} value={strategy.id}>
             {strategy.name}
           </option>

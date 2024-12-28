@@ -1,7 +1,7 @@
 import { CandlestickData } from 'lightweight-charts';
 import { Strategy, StrategySignal, registerStrategy } from './index';
 
-function calculateEMA(data: number[], period: number): number[] {
+export function calculateEMA(data: number[], period: number): number[] {
   const ema: number[] = [];
   const multiplier = 2 / (period + 1);
 
@@ -52,6 +52,7 @@ const emaCrossoverStrategy: Strategy = {
         type: 'buy',
         price: data[last].close,
         time: data[last].time as number,
+        message: `Buy Signal: Fast EMA (${fastEMA[last].toFixed(2)}) crossed above Slow EMA (${slowEMA[last].toFixed(2)})`
       };
     }
 
@@ -60,6 +61,7 @@ const emaCrossoverStrategy: Strategy = {
         type: 'sell',
         price: data[last].close,
         time: data[last].time as number,
+        message: `Sell Signal: Fast EMA (${fastEMA[last].toFixed(2)}) crossed below Slow EMA (${slowEMA[last].toFixed(2)})`
       };
     }
 

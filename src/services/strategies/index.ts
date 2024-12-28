@@ -1,53 +1,56 @@
-import { CandlestickData } from 'lightweight-charts';
+import { Time } from 'lightweight-charts';
+
+export type StrategyId = 'none' | 'ema_crossover' | 'sma_crossover';
 
 export interface StrategySignal {
   type: 'buy' | 'sell';
   price: number;
   time: number;
+  message: string;
+}
+
+export interface Indicator {
+  name: string;
+  data: Array<{
+    time: Time;
+    value: number;
+  }>;
 }
 
 export interface Strategy {
-  id: string;
+  id: StrategyId;
   name: string;
   description: string;
-  analyze: (data: CandlestickData[]) => StrategySignal | null;
-  indicators?: {
-    name: string;
-    data: any[];
-  }[];
+  indicators: Indicator[];
+  analyze: (data: any[]) => StrategySignal | null;
 }
 
-export type StrategyId = 'none' | 'sma_crossover' | 'ema_crossover' | 'rsi_divergence' | 'macd';
-
 class StrategyRegistry {
-  private static instance: StrategyRegistry;
-  private strategies: Map<string, Strategy>;
+  private strategies: Map<StrategyId, Strategy> = new Map();
 
-  private constructor() {
-    this.strategies = new Map();
-  }
-
-  public static getInstance(): StrategyRegistry {
-    if (!StrategyRegistry.instance) {
-      StrategyRegistry.instance = new StrategyRegistry();
-    }
-    return StrategyRegistry.instance;
-  }
-
-  public register(strategy: Strategy): void {
+  registerStrategy(strategy: Strategy) {
     this.strategies.set(strategy.id, strategy);
   }
 
-  public getAll(): Strategy[] {
-    return Array.from(this.strategies.values());
+  getStrategy(id: StrategyId): Strategy | undefined {
+    return this.strategies.get(id);
   }
 
-  public get(id: string): Strategy | undefined {
-    return this.strategies.get(id);
+  getAllStrategies(): Strategy[] {
+    return Array.from(this.strategies.values());
   }
 }
 
-// Export singleton instance methods
-export const registerStrategy = (strategy: Strategy) => StrategyRegistry.getInstance().register(strategy);
-export const getStrategies = () => StrategyRegistry.getInstance().getAll();
-export const getStrategy = (id: string) => StrategyRegistry.getInstance().get(id); 
+const registry = new StrategyRegistry();
+
+export function registerStrategy(strategy: Strategy) {
+  registry.registerStrategy(strategy);
+}
+
+export function getStrategy(id: StrategyId): Strategy | undefined {
+  return registry.getStrategy(id);
+}
+
+export function getAllStrategies(): Strategy[] {
+  return registry.getAllStrategies();
+} 

@@ -1,78 +1,93 @@
-import { CandlestickData } from 'lightweight-charts';
 import { Strategy, StrategySignal, registerStrategy } from './index';
+import { Time, BusinessDay } from 'lightweight-charts';
 
-function calculateSMA(data: number[], period: number): number[] {
+// Calculate Simple Moving Average (SMA)
+export function calculateSMA(data: number[], period: number): number[] {
   const sma: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      sma.push(NaN);
-      continue;
-    }
+  
+  // Fill initial values with NaN until we have enough data
+  for (let i = 0; i < period - 1; i++) {
+    sma.push(NaN);
+  }
 
+  // Calculate SMA for each point after the initial period
+  for (let i = period - 1; i < data.length; i++) {
     let sum = 0;
     for (let j = 0; j < period; j++) {
       sum += data[i - j];
     }
     sma.push(sum / period);
   }
+
   return sma;
 }
 
-// Create the strategy object
-const smaCrossoverStrategy: Strategy = {
+// Convert any time format to Unix timestamp
+function getUnixTime(time: Time): number {
+  if (typeof time === 'number') {
+    return time;
+  }
+  if (typeof time === 'string') {
+    return Math.floor(new Date(time).getTime() / 1000);
+  }
+  // Handle BusinessDay format
+  const { year, month, day } = time as BusinessDay;
+  return Math.floor(new Date(year, month - 1, day).getTime() / 1000);
+}
+
+export const smaCrossoverStrategy: Strategy = {
   id: 'sma_crossover',
   name: 'SMA Crossover',
-  description: 'Generates signals based on crossovers between short-term and long-term SMAs',
-  analyze: (data: CandlestickData[]) => {
+  description: 'Fast SMA (9) crossing Slow SMA (21)',
+  indicators: [
+    {
+      name: 'Fast SMA (9)',
+      data: []
+    },
+    {
+      name: 'Slow SMA (21)',
+      data: []
+    }
+  ],
+  analyze: (data) => {
     const prices = data.map(d => d.close);
-    const shortPeriod = 10;
-    const longPeriod = 20;
+    const fastSMA = calculateSMA(prices, 9);
+    const slowSMA = calculateSMA(prices, 21);
 
-    const shortSMA = calculateSMA(prices, shortPeriod);
-    const longSMA = calculateSMA(prices, longPeriod);
+    // Need at least two points to detect a crossover
+    if (fastSMA.length < 2) return null;
 
-    // Need at least two points to compare crossover
-    if (shortSMA.length < 2 || longSMA.length < 2) return null;
-
-    const last = shortSMA.length - 1;
+    const last = fastSMA.length - 1;
     const prev = last - 1;
 
-    // Check for crossover
-    const isCrossUp = shortSMA[prev] <= longSMA[prev] && shortSMA[last] > longSMA[last];
-    const isCrossDown = shortSMA[prev] >= longSMA[prev] && shortSMA[last] < longSMA[last];
-
-    if (isCrossUp) {
-      return {
-        type: 'buy',
-        price: data[last].close,
-        time: data[last].time as number,
-      };
-    }
-
-    if (isCrossDown) {
-      return {
-        type: 'sell',
-        price: data[last].close,
-        time: data[last].time as number,
-      };
+    // Check for crossovers
+    if (!isNaN(fastSMA[prev]) && !isNaN(slowSMA[prev]) && 
+        !isNaN(fastSMA[last]) && !isNaN(slowSMA[last])) {
+      
+      // Buy signal: Fast SMA crosses above Slow SMA
+      if (fastSMA[prev] <= slowSMA[prev] && fastSMA[last] > slowSMA[last]) {
+        return {
+          type: 'buy',
+          price: data[last].close,
+          time: getUnixTime(data[last].time),
+          message: `Buy Signal: Fast SMA (${fastSMA[last].toFixed(2)}) crossed above Slow SMA (${slowSMA[last].toFixed(2)})`
+        };
+      }
+      
+      // Sell signal: Fast SMA crosses below Slow SMA
+      if (fastSMA[prev] >= slowSMA[prev] && fastSMA[last] < slowSMA[last]) {
+        return {
+          type: 'sell',
+          price: data[last].close,
+          time: getUnixTime(data[last].time),
+          message: `Sell Signal: Fast SMA (${fastSMA[last].toFixed(2)}) crossed below Slow SMA (${slowSMA[last].toFixed(2)})`
+        };
+      }
     }
 
     return null;
-  },
-  indicators: [
-    {
-      name: 'Short SMA',
-      data: [], // This will be populated when the strategy runs
-    },
-    {
-      name: 'Long SMA',
-      data: [], // This will be populated when the strategy runs
-    },
-  ],
+  }
 };
 
 // Register the strategy
-registerStrategy(smaCrossoverStrategy);
-
-// Export the strategy object
-export default smaCrossoverStrategy; 
+registerStrategy(smaCrossoverStrategy); 

@@ -1,38 +1,14 @@
 'use client';
+import { Time, IChartApi, ChartOptions, DeepPartial, LineWidth, BusinessDay } from 'lightweight-charts';
 import { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, DeepPartial, ChartOptions, LineWidth, Time, BusinessDay } from 'lightweight-charts';
-import { getHistoricalData, subscribeToPrice, Timeframe } from '@/services/api/cryptoCompareAPI';
+import { createChart } from 'lightweight-charts';
+import { getHistoricalData, subscribeToPrice } from '@/services/api/cryptoCompareAPI';
+import { Timeframe } from '@/services/api/cryptoCompareAPI';
 import { StrategyId, getStrategy } from '@/services/strategies';
+import { calculateEMA } from '@/services/strategies/ema-crossover';
+import { calculateSMA } from '@/services/strategies/sma-crossover';
 
-// Import the calculateEMA function from the strategy file
-function calculateEMA(data: number[], period: number): number[] {
-  const ema: number[] = [];
-  const multiplier = 2 / (period + 1);
-
-  // First EMA uses SMA as initial value
-  let sum = 0;
-  for (let i = 0; i < period; i++) {
-    sum += data[i];
-    ema.push(NaN); // Fill initial values with NaN
-  }
-  ema[period - 1] = sum / period;
-
-  // Calculate EMA for remaining values
-  for (let i = period; i < data.length; i++) {
-    const currentValue = data[i];
-    const previousEMA = ema[i - 1];
-    const currentEMA = (currentValue - previousEMA) * multiplier + previousEMA;
-    ema.push(currentEMA);
-  }
-
-  return ema;
-}
-
-// WARNING: This component uses the CryptoCompare API for real-time Bitcoin price data.
-// DO NOT replace this with sample data or modify the data feed implementation.
-// The price feed is working correctly and should remain connected to CryptoCompare.
-
-export interface CandlestickChartProps {
+interface CandlestickChartProps {
   timeframe: Timeframe;
   strategy: StrategyId;
 }
@@ -154,14 +130,19 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
 
       // Run strategy analysis and update indicators
       const prices = data.map(d => d.close);
-      if (selectedStrategy.id === 'ema_crossover') {
-        console.log('Calculating EMAs for crossover strategy');
+      
+      if (selectedStrategy.id === 'ema_crossover' || selectedStrategy.id === 'sma_crossover') {
+        console.log(`Calculating ${selectedStrategy.id === 'ema_crossover' ? 'EMAs' : 'SMAs'} for crossover strategy`);
         const fastPeriod = 9;
         const slowPeriod = 21;
-        const fastEMA = calculateEMA(prices, fastPeriod);
-        const slowEMA = calculateEMA(prices, slowPeriod);
+        const fastLine = selectedStrategy.id === 'ema_crossover' 
+          ? calculateEMA(prices, fastPeriod)
+          : calculateSMA(prices, fastPeriod);
+        const slowLine = selectedStrategy.id === 'ema_crossover'
+          ? calculateEMA(prices, slowPeriod)
+          : calculateSMA(prices, slowPeriod);
 
-        // Add EMA lines first
+        // Add indicator lines
         selectedStrategy.indicators.forEach((indicator, index) => {
           console.log(`Adding indicator: ${indicator.name}`);
           const colors = ['#2962FF', '#FF6B6B']; // Blue for fast, Red for slow
@@ -178,21 +159,21 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
           });
           indicatorSeriesRefs.current.set(indicator.name, lineSeries);
 
-          // Update indicator data
-          const emaData = (index === 0 ? fastEMA : slowEMA).map((value, idx) => ({
+          // Update indicator data with proper types
+          const lineData = (index === 0 ? fastLine : slowLine).map((value: number, idx: number) => ({
             time: data[idx].time,
             value: value
           }));
-          lineSeries.setData(emaData);
+          lineSeries.setData(lineData);
         });
 
         // Get historical signals
         const markers = [];
         for (let i = 1; i < data.length; i++) {
-          const prevFast = fastEMA[i - 1];
-          const prevSlow = slowEMA[i - 1];
-          const currFast = fastEMA[i];
-          const currSlow = slowEMA[i];
+          const prevFast = fastLine[i - 1];
+          const prevSlow = slowLine[i - 1];
+          const currFast = fastLine[i];
+          const currSlow = slowLine[i];
 
           if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
             if (prevFast <= prevSlow && currFast > currSlow) {
@@ -208,8 +189,8 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
               console.log('Buy Signal at:', {
                 time: new Date(data[i].time * 1000).toLocaleString(),
                 price: data[i].close,
-                fastEMA: currFast.toFixed(2),
-                slowEMA: currSlow.toFixed(2)
+                fastLine: currFast.toFixed(2),
+                slowLine: currSlow.toFixed(2)
               });
             } else if (prevFast >= prevSlow && currFast < currSlow) {
               // Sell signal
@@ -224,8 +205,8 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
               console.log('Sell Signal at:', {
                 time: new Date(data[i].time * 1000).toLocaleString(),
                 price: data[i].close,
-                fastEMA: currFast.toFixed(2),
-                slowEMA: currSlow.toFixed(2)
+                fastLine: currFast.toFixed(2),
+                slowLine: currSlow.toFixed(2)
               });
             }
           }

@@ -18,7 +18,7 @@ export default function Home() {
       </div>
       <div className="p-4 border-t border-[#2B2B43] flex justify-between items-center">
         <TimeframeSelector timeframe={timeframe} setTimeframe={setTimeframe} />
-        <StrategySelector selectedStrategy={strategy} onStrategyChange={setStrategy} />
+        <StrategySelector value={strategy} onChange={setStrategy} />
       </div>
     </main>
   );
