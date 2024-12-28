@@ -17,7 +17,7 @@ export interface Strategy {
   }[];
 }
 
-export type StrategyId = 'none' | 'sma_crossover' | 'rsi_divergence' | 'macd';
+export type StrategyId = 'none' | 'sma_crossover' | 'ema_crossover' | 'rsi_divergence' | 'macd';
 
 class StrategyRegistry {
   private static instance: StrategyRegistry;

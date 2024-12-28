@@ -4,6 +4,30 @@ import { createChart, ColorType, IChartApi, DeepPartial, ChartOptions, LineWidth
 import { getHistoricalData, subscribeToPrice, Timeframe } from '@/services/api/cryptoCompareAPI';
 import { StrategyId, getStrategy } from '@/services/strategies';
 
+// Import the calculateEMA function from the strategy file
+function calculateEMA(data: number[], period: number): number[] {
+  const ema: number[] = [];
+  const multiplier = 2 / (period + 1);
+
+  // First EMA uses SMA as initial value
+  let sum = 0;
+  for (let i = 0; i < period; i++) {
+    sum += data[i];
+    ema.push(NaN); // Fill initial values with NaN
+  }
+  ema[period - 1] = sum / period;
+
+  // Calculate EMA for remaining values
+  for (let i = period; i < data.length; i++) {
+    const currentValue = data[i];
+    const previousEMA = ema[i - 1];
+    const currentEMA = (currentValue - previousEMA) * multiplier + previousEMA;
+    ema.push(currentEMA);
+  }
+
+  return ema;
+}
+
 // WARNING: This component uses the CryptoCompare API for real-time Bitcoin price data.
 // DO NOT replace this with sample data or modify the data feed implementation.
 // The price feed is working correctly and should remain connected to CryptoCompare.
@@ -18,9 +42,135 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<any>(null);
   const indicatorSeriesRefs = useRef<Map<string, any>>(new Map());
+  const historicalDataRef = useRef<any[]>([]);
+
+  // Function to update strategy indicators
+  const updateStrategyIndicators = (data: any[], chart: IChartApi) => {
+    try {
+      console.log('Updating strategy indicators:', {
+        strategy,
+        dataLength: data.length,
+        hasChart: !!chart
+      });
+
+      if (!chart || !data.length) {
+        console.log('Chart or data not ready, skipping update');
+        return;
+      }
+
+      if (strategy === 'none') {
+        console.log('No strategy selected, clearing indicators');
+        // Clear indicators when no strategy is selected
+        indicatorSeriesRefs.current.forEach(series => {
+          try {
+            chart.removeSeries(series);
+          } catch (e) {
+            console.error('Error removing series:', e);
+          }
+        });
+        indicatorSeriesRefs.current.clear();
+        return;
+      }
+
+      const selectedStrategy = getStrategy(strategy);
+      console.log('Selected strategy:', {
+        id: selectedStrategy?.id,
+        name: selectedStrategy?.name,
+        hasIndicators: selectedStrategy?.indicators?.length
+      });
+
+      if (!selectedStrategy) return;
+
+      // Clear previous indicators
+      console.log('Clearing previous indicators:', indicatorSeriesRefs.current.size);
+      indicatorSeriesRefs.current.forEach(series => {
+        try {
+          chart.removeSeries(series);
+        } catch (e) {
+          console.error('Error removing series:', e);
+        }
+      });
+      indicatorSeriesRefs.current.clear();
+
+      // Run strategy analysis and update indicators
+      const prices = data.map(d => d.close);
+      if (selectedStrategy.id === 'ema_crossover') {
+        console.log('Calculating EMAs for crossover strategy');
+        const fastPeriod = 9;
+        const slowPeriod = 21;
+        const fastEMA = calculateEMA(prices, fastPeriod);
+        const slowEMA = calculateEMA(prices, slowPeriod);
+
+        // Update indicator data
+        if (selectedStrategy.indicators) {
+          selectedStrategy.indicators[0].data = fastEMA.map((value, index) => ({
+            time: data[index].time,
+            value: value
+          }));
+          selectedStrategy.indicators[1].data = slowEMA.map((value, index) => ({
+            time: data[index].time,
+            value: value
+          }));
+          console.log('Updated EMA indicators:', {
+            fastEMALength: fastEMA.length,
+            slowEMALength: slowEMA.length
+          });
+        }
+      }
+
+      // Run strategy analysis
+      const signal = selectedStrategy.analyze(data);
+      if (signal) {
+        console.log('Strategy Signal:', signal);
+      }
+
+      // Add strategy indicators if any
+      if (selectedStrategy.indicators) {
+        console.log('Adding indicator series to chart');
+        selectedStrategy.indicators.forEach((indicator, index) => {
+          try {
+            const colors = ['#2962FF', '#FF6B6B']; // Blue for fast, Red for slow
+            const lineSeries = chart.addLineSeries({
+              color: colors[index],
+              lineWidth: 2,
+              title: indicator.name,
+              priceFormat: {
+                type: 'price',
+                precision: 2,
+                minMove: 0.01,
+              },
+            });
+            indicatorSeriesRefs.current.set(indicator.name, lineSeries);
+            if (indicator.data.length > 0) {
+              console.log(`Setting data for ${indicator.name}:`, indicator.data.length);
+              lineSeries.setData(indicator.data);
+            }
+          } catch (e) {
+            console.error(`Error adding indicator series ${indicator.name}:`, e);
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Error in updateStrategyIndicators:', e);
+    }
+  };
+
+  // Add an effect specifically for strategy changes
+  useEffect(() => {
+    console.log('Strategy changed:', strategy);
+    // Add a small delay to ensure chart is ready
+    const timeoutId = setTimeout(() => {
+      if (chartRef.current && historicalDataRef.current.length > 0) {
+        updateStrategyIndicators(historicalDataRef.current, chartRef.current);
+      }
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
+  }, [strategy]); // Only run when strategy changes
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
+    console.log('Initializing chart with timeframe:', timeframe);
 
     const formatTime = (time: Time) => {
       let date: Date;
@@ -112,6 +262,8 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
     const loadData = async () => {
       try {
         const historicalData = await getHistoricalData(timeframe);
+        console.log('Loaded historical data:', historicalData.length);
+        historicalDataRef.current = historicalData;
         candlestickSeries.setData(historicalData.map(d => ({
           time: d.time,
           open: d.open,
@@ -120,37 +272,8 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
           close: d.close
         })));
 
-        // Apply strategy analysis if a strategy is selected
-        if (strategy !== 'none') {
-          const selectedStrategy = getStrategy(strategy);
-          if (selectedStrategy) {
-            // Clear previous indicators
-            indicatorSeriesRefs.current.forEach(series => {
-              chart.removeSeries(series);
-            });
-            indicatorSeriesRefs.current.clear();
-
-            // Run strategy analysis
-            const signal = selectedStrategy.analyze(historicalData);
-            if (signal) {
-              console.log('Strategy Signal:', signal);
-            }
-
-            // Add strategy indicators if any
-            if (selectedStrategy.indicators) {
-              selectedStrategy.indicators.forEach(indicator => {
-                const lineSeries = chart.addLineSeries({
-                  color: '#2962FF',
-                  lineWidth: 2,
-                });
-                indicatorSeriesRefs.current.set(indicator.name, lineSeries);
-                if (indicator.data.length > 0) {
-                  lineSeries.setData(indicator.data);
-                }
-              });
-            }
-          }
-        }
+        // Update strategy indicators with initial data
+        updateStrategyIndicators(historicalData, chart);
       } catch (error) {
         console.error('Error loading historical data:', error);
       }
@@ -191,13 +314,20 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
         if (candleTimestamp !== currentCandle.time) {
           // If there was a previous candle, finalize it
           if (currentCandle.time !== 0) {
-            candlestickSeriesRef.current.update({
+            const newCandle = {
               time: currentCandle.time,
               open: currentCandle.open,
               high: currentCandle.high,
               low: currentCandle.low,
               close: currentCandle.close,
-            });
+            };
+            candlestickSeriesRef.current.update(newCandle);
+            
+            // Update historical data and strategy indicators
+            historicalDataRef.current = [...historicalDataRef.current.slice(1), newCandle];
+            if (chartRef.current) {
+              updateStrategyIndicators(historicalDataRef.current, chartRef.current);
+            }
           }
           
           // Start a new candle
@@ -266,4 +396,4 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
   }, [timeframe, strategy]);
 
   return <div ref={chartContainerRef} className="w-full h-full" />;
-}
+} 

@@ -12,7 +12,9 @@ export function StrategySelector({ selectedStrategy, onStrategyChange }: Strateg
 
   useEffect(() => {
     // Load strategies immediately
-    setAvailableStrategies(getStrategies());
+    const strategies = getStrategies();
+    console.log('Available strategies:', strategies); // Debug log
+    setAvailableStrategies(strategies);
   }, []);
 
   return (

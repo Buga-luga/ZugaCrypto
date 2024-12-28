@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { CandlestickChart } from '@/components/Chart/CandlestickChart';
 import { TimeframeSelector } from '@/components/common/TimeframeSelector';
 import { StrategySelector } from '@/components/common/StrategySelector';
-import { Timeframe } from '@/services/api/cryptoCompareAPI';
 import { StrategyId } from '@/services/strategies';
+import { Timeframe } from '@/services/api/cryptoCompareAPI';
 import '@/services/strategies/registry';
 
 export default function Home() {

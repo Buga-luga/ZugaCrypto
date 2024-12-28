@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { createChart, ColorType, IChartApi, DeepPartial, ChartOptions, LineWidth, Time, BusinessDay } from 'lightweight-charts';
 import { getHistoricalData, subscribeToPrice, Timeframe } from '@/services/api/cryptoCompareAPI';
+import { StrategyId, getStrategy } from '@/services/strategies';
 
 // WARNING: This component uses the CryptoCompare API for real-time Bitcoin price data.
 // DO NOT replace this with sample data or modify the data feed implementation.
@@ -9,12 +10,14 @@ import { getHistoricalData, subscribeToPrice, Timeframe } from '@/services/api/c
 
 export interface CandlestickChartProps {
   timeframe: Timeframe;
+  strategy: StrategyId;
 }
 
-export function BasicCandlestickChart({ timeframe }: CandlestickChartProps) {
+export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<any>(null);
+  const indicatorSeriesRefs = useRef<Map<string, any>>(new Map());
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -116,6 +119,38 @@ export function BasicCandlestickChart({ timeframe }: CandlestickChartProps) {
           low: d.low,
           close: d.close
         })));
+
+        // Apply strategy analysis if a strategy is selected
+        if (strategy !== 'none') {
+          const selectedStrategy = getStrategy(strategy);
+          if (selectedStrategy) {
+            // Clear previous indicators
+            indicatorSeriesRefs.current.forEach(series => {
+              chart.removeSeries(series);
+            });
+            indicatorSeriesRefs.current.clear();
+
+            // Run strategy analysis
+            const signal = selectedStrategy.analyze(historicalData);
+            if (signal) {
+              console.log('Strategy Signal:', signal);
+            }
+
+            // Add strategy indicators if any
+            if (selectedStrategy.indicators) {
+              selectedStrategy.indicators.forEach(indicator => {
+                const lineSeries = chart.addLineSeries({
+                  color: '#2962FF',
+                  lineWidth: 2,
+                });
+                indicatorSeriesRefs.current.set(indicator.name, lineSeries);
+                if (indicator.data.length > 0) {
+                  lineSeries.setData(indicator.data);
+                }
+              });
+            }
+          }
+        }
       } catch (error) {
         console.error('Error loading historical data:', error);
       }
@@ -228,7 +263,7 @@ export function BasicCandlestickChart({ timeframe }: CandlestickChartProps) {
         chartRef.current.remove();
       }
     };
-  }, [timeframe]);
+  }, [timeframe, strategy]);
 
   return <div ref={chartContainerRef} className="w-full h-full" />;
 } 

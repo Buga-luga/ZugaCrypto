@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   env: {
-    PORT: 3001
+    PORT: '3001'
   },
   experimental: {
     swcMinify: true,

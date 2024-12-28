@@ -1,6 +1,6 @@
 // Import all strategies
 import './sma-crossover';
+import './ema-crossover';
 
-// Note: Add new strategy imports here
-// import './rsi-divergence';
-// import './macd'; 
+// Add new strategy imports above this line
+// DO NOT remove or modify existing imports as they are required for the strategies to register 
