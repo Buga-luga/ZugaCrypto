@@ -43,54 +43,114 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
   const candlestickSeriesRef = useRef<any>(null);
   const indicatorSeriesRefs = useRef<Map<string, any>>(new Map());
   const historicalDataRef = useRef<any[]>([]);
+  const markerSeriesRef = useRef<any>(null);
+
+  // Function to detect signals from EMA data
+  const detectEMASignals = (data: any[], fastEMA: number[], slowEMA: number[]): any[] => {
+    const markers: any[] = [];
+    for (let i = 1; i < Math.min(data.length, fastEMA.length, slowEMA.length); i++) {
+      const prevFast = fastEMA[i - 1];
+      const prevSlow = slowEMA[i - 1];
+      const currFast = fastEMA[i];
+      const currSlow = slowEMA[i];
+
+      // Debug crossover conditions
+      console.log('Checking crossover:', {
+        time: new Date(data[i].time * 1000).toLocaleString(),
+        prevFast: prevFast?.toFixed(2),
+        prevSlow: prevSlow?.toFixed(2),
+        currFast: currFast?.toFixed(2),
+        currSlow: currSlow?.toFixed(2),
+        isBuy: prevFast <= prevSlow && currFast > currSlow,
+        isSell: prevFast >= prevSlow && currFast < currSlow
+      });
+
+      // Only add signals if we have valid EMA values
+      if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
+        // Buy signal: Fast EMA crosses above Slow EMA
+        if (prevFast <= prevSlow && currFast > currSlow) {
+          markers.push({
+            time: data[i].time,
+            position: 'belowBar',
+            color: '#26a69a',
+            shape: 'arrowUp',
+            text: `BUY\n$${data[i].close.toFixed(2)}`,
+            size: 2,
+          });
+          console.log('🟢 Buy Signal Detected:', {
+            price: data[i].close,
+            time: new Date(data[i].time * 1000).toLocaleString(),
+            fastEMA: currFast.toFixed(2),
+            slowEMA: currSlow.toFixed(2),
+            diff: (currFast - currSlow).toFixed(2)
+          });
+        }
+        // Sell signal: Fast EMA crosses below Slow EMA
+        else if (prevFast >= prevSlow && currFast < currSlow) {
+          markers.push({
+            time: data[i].time,
+            position: 'aboveBar',
+            color: '#ef5350',
+            shape: 'arrowDown',
+            text: `SELL\n$${data[i].close.toFixed(2)}`,
+            size: 2,
+          });
+          console.log('🔴 Sell Signal Detected:', {
+            price: data[i].close,
+            time: new Date(data[i].time * 1000).toLocaleString(),
+            fastEMA: currFast.toFixed(2),
+            slowEMA: currSlow.toFixed(2),
+            diff: (currFast - currSlow).toFixed(2)
+          });
+        }
+      }
+    }
+    return markers;
+  };
+
+  // Function to safely remove a series
+  const safelyRemoveSeries = (chart: IChartApi, series: any) => {
+    try {
+      if (series && chart) {
+        chart.removeSeries(series);
+      }
+    } catch (e) {
+      console.error('Error removing series:', e);
+    }
+  };
 
   // Function to update strategy indicators
   const updateStrategyIndicators = (data: any[], chart: IChartApi) => {
     try {
-      console.log('Updating strategy indicators:', {
-        strategy,
-        dataLength: data.length,
-        hasChart: !!chart
-      });
-
       if (!chart || !data.length) {
         console.log('Chart or data not ready, skipping update');
         return;
       }
 
+      // Clear existing markers and indicators
+      safelyRemoveSeries(chart, markerSeriesRef.current);
+      markerSeriesRef.current = null;
+
+      indicatorSeriesRefs.current.forEach(series => {
+        safelyRemoveSeries(chart, series);
+      });
+      indicatorSeriesRefs.current.clear();
+
       if (strategy === 'none') {
         console.log('No strategy selected, clearing indicators');
-        // Clear indicators when no strategy is selected
-        indicatorSeriesRefs.current.forEach(series => {
-          try {
-            chart.removeSeries(series);
-          } catch (e) {
-            console.error('Error removing series:', e);
-          }
-        });
-        indicatorSeriesRefs.current.clear();
         return;
       }
 
       const selectedStrategy = getStrategy(strategy);
-      console.log('Selected strategy:', {
-        id: selectedStrategy?.id,
-        name: selectedStrategy?.name,
-        hasIndicators: selectedStrategy?.indicators?.length
-      });
+      if (!selectedStrategy?.indicators) {
+        console.log('No indicators found for strategy:', strategy);
+        return;
+      }
 
-      if (!selectedStrategy) return;
+      console.log('Setting up strategy:', selectedStrategy.id);
 
-      // Clear previous indicators
-      console.log('Clearing previous indicators:', indicatorSeriesRefs.current.size);
-      indicatorSeriesRefs.current.forEach(series => {
-        try {
-          chart.removeSeries(series);
-        } catch (e) {
-          console.error('Error removing series:', e);
-        }
-      });
-      indicatorSeriesRefs.current.clear();
+      // Create marker series for signals
+      markerSeriesRef.current = candlestickSeriesRef.current;  // Use the candlestick series for markers
 
       // Run strategy analysis and update indicators
       const prices = data.map(d => d.close);
@@ -101,71 +161,106 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
         const fastEMA = calculateEMA(prices, fastPeriod);
         const slowEMA = calculateEMA(prices, slowPeriod);
 
-        // Update indicator data
-        if (selectedStrategy.indicators) {
-          selectedStrategy.indicators[0].data = fastEMA.map((value, index) => ({
-            time: data[index].time,
-            value: value
-          }));
-          selectedStrategy.indicators[1].data = slowEMA.map((value, index) => ({
-            time: data[index].time,
-            value: value
-          }));
-          console.log('Updated EMA indicators:', {
-            fastEMALength: fastEMA.length,
-            slowEMALength: slowEMA.length
-          });
-        }
-      }
-
-      // Run strategy analysis
-      const signal = selectedStrategy.analyze(data);
-      if (signal) {
-        console.log('Strategy Signal:', signal);
-      }
-
-      // Add strategy indicators if any
-      if (selectedStrategy.indicators) {
-        console.log('Adding indicator series to chart');
+        // Add EMA lines first
         selectedStrategy.indicators.forEach((indicator, index) => {
-          try {
-            const colors = ['#2962FF', '#FF6B6B']; // Blue for fast, Red for slow
-            const lineSeries = chart.addLineSeries({
-              color: colors[index],
-              lineWidth: 2,
-              title: indicator.name,
-              priceFormat: {
-                type: 'price',
-                precision: 2,
-                minMove: 0.01,
-              },
-            });
-            indicatorSeriesRefs.current.set(indicator.name, lineSeries);
-            if (indicator.data.length > 0) {
-              console.log(`Setting data for ${indicator.name}:`, indicator.data.length);
-              lineSeries.setData(indicator.data);
-            }
-          } catch (e) {
-            console.error(`Error adding indicator series ${indicator.name}:`, e);
-          }
+          console.log(`Adding indicator: ${indicator.name}`);
+          const colors = ['#2962FF', '#FF6B6B']; // Blue for fast, Red for slow
+          const lineSeries = chart.addLineSeries({
+            color: colors[index],
+            lineWidth: 2,
+            title: indicator.name,
+            priceFormat: {
+              type: 'price',
+              precision: 2,
+              minMove: 0.01,
+            },
+            lineStyle: 1, // Solid line
+          });
+          indicatorSeriesRefs.current.set(indicator.name, lineSeries);
+
+          // Update indicator data
+          const emaData = (index === 0 ? fastEMA : slowEMA).map((value, idx) => ({
+            time: data[idx].time,
+            value: value
+          }));
+          lineSeries.setData(emaData);
         });
+
+        // Get historical signals
+        const markers = [];
+        for (let i = 1; i < data.length; i++) {
+          const prevFast = fastEMA[i - 1];
+          const prevSlow = slowEMA[i - 1];
+          const currFast = fastEMA[i];
+          const currSlow = slowEMA[i];
+
+          if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
+            if (prevFast <= prevSlow && currFast > currSlow) {
+              // Buy signal
+              markers.push({
+                time: data[i].time,
+                position: 'belowBar',
+                color: '#26a69a',
+                shape: 'arrowUp',
+                text: 'BUY',
+                size: 2,
+              });
+              console.log('Buy Signal at:', {
+                time: new Date(data[i].time * 1000).toLocaleString(),
+                price: data[i].close,
+                fastEMA: currFast.toFixed(2),
+                slowEMA: currSlow.toFixed(2)
+              });
+            } else if (prevFast >= prevSlow && currFast < currSlow) {
+              // Sell signal
+              markers.push({
+                time: data[i].time,
+                position: 'aboveBar',
+                color: '#ef5350',
+                shape: 'arrowDown',
+                text: 'SELL',
+                size: 2,
+              });
+              console.log('Sell Signal at:', {
+                time: new Date(data[i].time * 1000).toLocaleString(),
+                price: data[i].close,
+                fastEMA: currFast.toFixed(2),
+                slowEMA: currSlow.toFixed(2)
+              });
+            }
+          }
+        }
+
+        if (markers.length > 0) {
+          console.log('Setting markers:', markers);
+          markerSeriesRef.current.setMarkers(markers);
+        }
       }
     } catch (e) {
       console.error('Error in updateStrategyIndicators:', e);
     }
   };
 
-  // Add an effect specifically for strategy changes
+  // Update the strategy change effect
   useEffect(() => {
     console.log('Strategy changed:', strategy);
-    // Add a small delay to ensure chart is ready
-    const timeoutId = setTimeout(() => {
-      if (chartRef.current && historicalDataRef.current.length > 0) {
+    
+    if (chartRef.current) {
+      // Clear existing indicators and markers
+      safelyRemoveSeries(chartRef.current, markerSeriesRef.current);
+      markerSeriesRef.current = null;
+
+      indicatorSeriesRefs.current.forEach(series => {
+        safelyRemoveSeries(chartRef.current!, series);
+      });
+      indicatorSeriesRefs.current.clear();
+
+      // Reinitialize strategy indicators
+      if (historicalDataRef.current.length > 0) {
+        console.log('Reinitializing strategy indicators with data length:', historicalDataRef.current.length);
         updateStrategyIndicators(historicalDataRef.current, chartRef.current);
       }
-    }, 100);
-
-    return () => clearTimeout(timeoutId);
+    }
   }, [strategy]); // Only run when strategy changes
 
   useEffect(() => {
@@ -323,11 +418,8 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
             };
             candlestickSeriesRef.current.update(newCandle);
             
-            // Update historical data and strategy indicators
+            // Update historical data with the new candle
             historicalDataRef.current = [...historicalDataRef.current.slice(1), newCandle];
-            if (chartRef.current) {
-              updateStrategyIndicators(historicalDataRef.current, chartRef.current);
-            }
           }
           
           // Start a new candle
@@ -338,21 +430,113 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
             low: data.value,
             close: data.value,
           };
+
+          // Update candlestick series with the new candle
+          candlestickSeriesRef.current.update(currentCandle);
         } else {
           // Update existing candle
           if (data.value > currentCandle.high) currentCandle.high = data.value;
           if (data.value < currentCandle.low) currentCandle.low = data.value;
           currentCandle.close = data.value;
+
+          // Update candlestick series with the current state
+          candlestickSeriesRef.current.update(currentCandle);
         }
 
-        // Update the chart with the current candle state
-        candlestickSeriesRef.current.update({
-          time: currentCandle.time,
-          open: currentCandle.open,
-          high: currentCandle.high,
-          low: currentCandle.low,
-          close: currentCandle.close,
-        });
+        // Update strategy indicators if we have a strategy selected
+        if (strategy !== 'none' && chartRef.current && indicatorSeriesRefs.current.size > 0) {
+          const selectedStrategy = getStrategy(strategy);
+          if (selectedStrategy && selectedStrategy.id === 'ema_crossover') {
+            // Include the current candle in the calculations
+            const updatedData = [...historicalDataRef.current.slice(1), currentCandle];
+            const prices = updatedData.map(d => d.close);
+            const fastPeriod = 9;
+            const slowPeriod = 21;
+            const fastEMA = calculateEMA(prices, fastPeriod);
+            const slowEMA = calculateEMA(prices, slowPeriod);
+
+            // Update the line series with new data
+            indicatorSeriesRefs.current.forEach((series, name) => {
+              const emaData = (name === 'Fast EMA (9)' ? fastEMA : slowEMA).map((value, index) => ({
+                time: updatedData[index].time,
+                value: value
+              }));
+              series.setData(emaData);
+            });
+
+            // Check for new signal
+            const last = fastEMA.length - 1;
+            const prev = last - 1;
+            if (prev >= 0 && !isNaN(fastEMA[prev]) && !isNaN(slowEMA[prev]) && 
+                !isNaN(fastEMA[last]) && !isNaN(slowEMA[last])) {
+              
+              // Debug real-time crossover conditions
+              const crossingUp = fastEMA[prev] <= slowEMA[prev] && fastEMA[last] > slowEMA[last];
+              const crossingDown = fastEMA[prev] >= slowEMA[prev] && fastEMA[last] < slowEMA[last];
+              
+              if (crossingUp || crossingDown) {
+                console.log('Real-time EMA Status:', {
+                  time: new Date(currentCandle.time * 1000).toLocaleString(),
+                  price: currentCandle.close,
+                  prevFastEMA: fastEMA[prev].toFixed(2),
+                  prevSlowEMA: slowEMA[prev].toFixed(2),
+                  currFastEMA: fastEMA[last].toFixed(2),
+                  currSlowEMA: slowEMA[last].toFixed(2),
+                  signal: crossingUp ? 'BUY' : 'SELL'
+                });
+              }
+
+              let newMarker = null;
+              if (crossingUp) {
+                // Buy signal
+                newMarker = {
+                  time: currentCandle.time,
+                  position: 'belowBar',
+                  color: '#26a69a',
+                  shape: 'arrowUp',
+                  text: 'BUY',
+                  size: 2,
+                };
+                console.log('🟢 Real-time Buy Signal:', {
+                  price: currentCandle.close,
+                  time: new Date(currentCandle.time * 1000).toLocaleString(),
+                  fastEMA: fastEMA[last].toFixed(2),
+                  slowEMA: slowEMA[last].toFixed(2),
+                  diff: (fastEMA[last] - slowEMA[last]).toFixed(2)
+                });
+              } else if (crossingDown) {
+                // Sell signal
+                newMarker = {
+                  time: currentCandle.time,
+                  position: 'aboveBar',
+                  color: '#ef5350',
+                  shape: 'arrowDown',
+                  text: 'SELL',
+                  size: 2,
+                };
+                console.log('🔴 Real-time Sell Signal:', {
+                  price: currentCandle.close,
+                  time: new Date(currentCandle.time * 1000).toLocaleString(),
+                  fastEMA: fastEMA[last].toFixed(2),
+                  slowEMA: slowEMA[last].toFixed(2),
+                  diff: (fastEMA[last] - slowEMA[last]).toFixed(2)
+                });
+              }
+
+              // Add new marker if signal detected
+              if (newMarker && candlestickSeriesRef.current) {
+                const currentMarkers = candlestickSeriesRef.current.markers() || [];
+                const signalExists = currentMarkers.some(
+                  (m: any) => m.time === newMarker.time && m.text === newMarker.text
+                );
+                
+                if (!signalExists) {
+                  candlestickSeriesRef.current.setMarkers([...currentMarkers, newMarker]);
+                }
+              }
+            }
+          }
+        }
       }
     }, timeframe);
 
