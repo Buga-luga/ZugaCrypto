@@ -68,16 +68,17 @@ interface TickerHeaderProps {
   token?: string;
   baseToken?: string;
   exchange?: string;
-  currentPrice?: string;
-  priceStats?: {
-    high24h: string;
-    low24h: string;
+  currentPrice: string;
+  priceStats: {
     change1h: string;
     change24h: string;
     change7d: string;
+    high24h: string;
+    low24h: string;
   };
   onExchangeChange?: (exchange: string) => void;
   onPairChange: (token: string, baseToken: string) => void;
+  isLoading?: boolean;
 }
 
 export function TickerHeader({ 
@@ -87,7 +88,8 @@ export function TickerHeader({
   currentPrice,
   priceStats,
   onExchangeChange = () => {}, 
-  onPairChange 
+  onPairChange,
+  isLoading = false
 }: TickerHeaderProps) {
   const [showPairSelector, setShowPairSelector] = useState(false);
   const [showExchangeSelector, setShowExchangeSelector] = useState(false);
@@ -110,7 +112,12 @@ export function TickerHeader({
   };
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 bg-[#1E222D] text-white border-b border-[#2B2B43]">
+    <div className="flex items-center justify-between p-4 bg-[#1E222D] border-b border-[#2B2B43]">
+      {isLoading && (
+        <div className="absolute inset-0 bg-[#1E222D] bg-opacity-50 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+        </div>
+      )}
       <div className="flex items-center space-x-4">
         <div className="relative">
           <button

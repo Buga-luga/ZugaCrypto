@@ -38,6 +38,20 @@ interface Candle {
   close: number;
 }
 
+// Function to get interval in seconds
+const getIntervalSeconds = (tf: Timeframe): number => {
+  switch (tf) {
+    case '1m': return 60;
+    case '5m': return 300;
+    case '15m': return 900;
+    case '30m': return 1800;
+    case '1h': return 3600;
+    case '4h': return 14400;
+    case '1d': return 86400;
+    default: return 60;
+  }
+};
+
 export function CandlestickChart({ 
   timeframe, 
   strategy, 
@@ -46,21 +60,17 @@ export function CandlestickChart({
   exchange = 'CryptoCompare',
   onPairChange = () => {} 
 }: CandlestickChartProps) {
-  // Function to get default price format based on base token
-  const getDefaultPrice = (baseToken: string) => {
-    return isBTCPair(baseToken) ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
-  };
-
   const [selectedExchange, setSelectedExchange] = useState(exchange);
   const [currentBaseToken, setCurrentBaseToken] = useState(baseToken);
-  const [currentPrice, setCurrentPrice] = useState<string>(() => getDefaultPrice(baseToken));
+  const [currentPrice, setCurrentPrice] = useState<string>(() => formatPrice(0, baseToken));
   const [priceStats, setPriceStats] = useState(() => ({
-    change1h: getDefaultPrice(baseToken),
-    change24h: getDefaultPrice(baseToken),
-    change7d: getDefaultPrice(baseToken),
-    high24h: getDefaultPrice(baseToken),
-    low24h: getDefaultPrice(baseToken)
+    change1h: '0.00',
+    change24h: '0.00',
+    change7d: '0.00',
+    high24h: formatPrice(0, baseToken),
+    low24h: formatPrice(0, baseToken)
   }));
+
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<any>(null);
@@ -70,487 +80,11 @@ export function CandlestickChart({
   const currentCandleRef = useRef<any>(null);
   const lastSignalRef = useRef<{ time: number, type: 'buy' | 'sell' } | null>(null);
 
-  // Function to get interval in seconds
-  const getIntervalSeconds = (tf: Timeframe): number => {
-    switch (tf) {
-      case '1m': return 60;
-      case '5m': return 300;
-      case '15m': return 900;
-      case '30m': return 1800;
-      case '1h': return 3600;
-      case '4h': return 14400;
-      case '1d': return 86400;
-      default: return 60;
-    }
-  };
-
-  // Function to safely remove a series
-  const safelyRemoveSeries = (chart: IChartApi, series: any) => {
-    try {
-      if (series && chart) {
-        chart.removeSeries(series);
-      }
-    } catch (e) {
-      console.error('Error removing series:', e);
-    }
-  };
-
-  // Function to get appropriate decimal places based on base token
-  const getDecimalPlaces = (baseToken: string): number => {
-    return isBTCPair(baseToken) ? 8 : 2;
-  };
-
-  // Function to get appropriate min move based on base token
-  const getMinMove = (baseToken: string): number => {
-    return isBTCPair(baseToken) ? 0.00000001 : 0.01;
-  };
-
-  // Function to format price based on base token
-  const formatPrice = (price: number, baseToken: string): string => {
-    if (typeof price !== 'number' || isNaN(price)) {
-      return isBTCPair(baseToken) ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
-    }
-    return price.toFixed(isBTCPair(baseToken) ? 8 : 2);
-  };
-
-  // Function to format signal text
-  const formatSignalText = (type: string, price: number, baseToken: string): string => {
-    return `${type} ${formatPrice(price, baseToken)}`;
-  };
-
-  // Function to check for crossover signals
-  const checkForSignal = (
-    prevFast: number,
-    prevSlow: number,
-    currFast: number,
-    currSlow: number,
-    candle: any,
-    data: any[]
-  ) => {
-    if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
-      if (strategy === 'macd_crossover') {
-        const prevHistogram = prevFast - prevSlow;
-        const currHistogram = currFast - currSlow;
-        
-        if (prevHistogram <= 0 && currHistogram > 0) {
-          return {
-            time: candle.time,
-            position: 'belowBar',
-            color: '#26a69a',
-            shape: 'arrowUp',
-            text: formatSignalText('Buy', candle.close, baseToken),
-            size: 2,
-            value: candle.low * 0.999,
-          };
-        }
-        else if (prevHistogram >= 0 && currHistogram < 0) {
-          return {
-            time: candle.time,
-            position: 'aboveBar',
-            color: '#ef5350',
-            shape: 'arrowDown',
-            text: formatSignalText('Sell', candle.close, baseToken),
-            size: 2,
-            value: candle.high * 1.001,
-          };
-        }
-      } else {
-        const avgPrice = data.reduce((sum, d) => sum + d.close, 0) / data.length;
-        const priceRange = data.reduce((range, d) => Math.max(range, Math.abs(d.high - d.low)), 0);
-        const offset = priceRange * 0.75;
-
-        if (prevFast <= prevSlow && currFast > currSlow) {
-          return {
-            time: candle.time,
-            position: 'belowBar',
-            color: '#26a69a',
-            shape: 'arrowUp',
-            text: formatSignalText('Buy', candle.close, baseToken),
-            size: 2,
-            value: Math.min(...data.slice(-10).map(d => d.low)) - offset,
-          };
-        }
-        else if (prevFast >= prevSlow && currFast < currSlow) {
-          return {
-            time: candle.time,
-            position: 'aboveBar',
-            color: '#ef5350',
-            shape: 'arrowDown',
-            text: formatSignalText('Sell', candle.close, baseToken),
-            size: 2,
-            value: Math.max(...data.slice(-10).map(d => d.high)) + offset,
-          };
-        }
-      }
-    }
-    return null;
-  };
-
-  // Function to get histogram scale factor based on timeframe
-  const getHistogramScaleFactor = (tf: Timeframe, maxHistogram: number): number => {
-    if (maxHistogram === 0) return 1;
-    
-    switch (tf) {
-      case '1h':
-      case '4h':
-      case '1d':
-      case '1w':
-        return 100 / maxHistogram; // Much larger scaling for higher timeframes
-      default:
-        return 20 / maxHistogram; // Original scaling for lower timeframes
-    }
-  };
-
-  // Function to add strategy indicators
-  const addStrategyIndicators = (chart: IChartApi, data: any[]) => {
-    console.log('Adding strategy indicators');
-    
-    // Clear any existing indicators
-    indicatorSeriesRefs.current.forEach(series => safelyRemoveSeries(chart, series));
-    indicatorSeriesRefs.current.clear();
-    
-    if (markerSeriesRef.current) {
-      safelyRemoveSeries(chart, markerSeriesRef.current);
-      markerSeriesRef.current = null;
-    }
-
-    if (strategy === 'none') return;
-
-    // Ensure data is sorted and deduplicated by time
-    const uniqueData = Array.from(new Map(data.map(item => [item.time, item])).values())
-      .sort((a, b) => (a.time as number) - (b.time as number));
-
-    const prices = uniqueData.map(d => d.close);
-    let fastLine: number[] = [];
-    let slowLine: number[] = [];
-    let histogramData: number[] = [];
-
-    // Calculate indicators based on strategy type
-    if (strategy === 'macd_crossover') {
-      const macdData = calculateMACD(prices);
-      fastLine = macdData.macd;
-      slowLine = macdData.signal;
-      histogramData = macdData.histogram;
-    } else {
-      switch (strategy) {
-        case 'ema_crossover':
-          fastLine = calculateEMA(prices, 9);
-          slowLine = calculateEMA(prices, 21);
-          break;
-        case 'sma_crossover':
-          fastLine = calculateSMA(prices, 9);
-          slowLine = calculateSMA(prices, 21);
-          break;
-        case 'tema_crossover':
-          fastLine = calculateTEMA(prices, 7);
-          slowLine = calculateTEMA(prices, 21);
-          break;
-        case 'golden_cross':
-          fastLine = calculateSMA(prices, 50);
-          slowLine = calculateSMA(prices, 200);
-          break;
-        case 'hull_crossover':
-          fastLine = calculateHMA(prices, 9);
-          slowLine = calculateHMA(prices, 21);
-          break;
-        case 'ema_5_13':
-          fastLine = calculateEMA(prices, 5);
-          slowLine = calculateEMA(prices, 13);
-          break;
-      }
-    }
-
-    // Add indicator lines
-    const selectedStrategy = getStrategy(strategy);
-    if (!selectedStrategy) return;
-
-    if (strategy === 'macd_crossover') {
-      // Create MACD series with separate price scale
-      const macdSeries = chart.addLineSeries({
-        color: '#2962FF',
-        lineWidth: 2,
-        title: 'MACD',
-        priceFormat: {
-          type: 'price',
-          precision: getDecimalPlaces(baseToken),
-          minMove: getMinMove(baseToken),
-        },
-        priceScaleId: 'overlay',
-      });
-
-      const signalSeries = chart.addLineSeries({
-        color: '#FF6B6B',
-        lineWidth: 2,
-        title: 'Signal',
-        priceFormat: {
-          type: 'price',
-          precision: getDecimalPlaces(baseToken),
-          minMove: getMinMove(baseToken),
-        },
-        priceScaleId: 'overlay',
-      });
-
-      const histogramSeries = chart.addHistogramSeries({
-        color: '#26a69a',
-        title: 'Histogram',
-        priceFormat: {
-          type: 'price',
-          precision: getDecimalPlaces(baseToken),
-          minMove: getMinMove(baseToken),
-        },
-        priceScaleId: 'overlay',
-        base: 0,
-      });
-
-      // Configure the price scale for MACD
-      const macdScale = chart.priceScale('overlay');
-      if (macdScale) {
-        macdScale.applyOptions({
-          scaleMargins: {
-            top: 0.7,
-            bottom: 0.1,
-          },
-          visible: true,
-          borderVisible: true,
-        });
-      }
-
-      indicatorSeriesRefs.current.set('MACD', macdSeries);
-      indicatorSeriesRefs.current.set('Signal', signalSeries);
-      indicatorSeriesRefs.current.set('Histogram', histogramSeries);
-
-      // Set data for each series
-      const macdLineData = fastLine.map((value, idx) => ({
-        time: uniqueData[idx].time,
-        value: isNaN(value) ? null : value
-      })).filter(d => d.value !== null);
-
-      const signalLineData = slowLine.map((value, idx) => ({
-        time: uniqueData[idx].time,
-        value: isNaN(value) ? null : value
-      })).filter(d => d.value !== null);
-
-      // Scale histogram values with dynamic scaling
-      const maxHistogram = Math.max(...histogramData.map(Math.abs));
-      const scaleFactor = getHistogramScaleFactor(timeframe, maxHistogram);
-
-      const histogramSeriesData = histogramData.map((value, idx) => ({
-        time: uniqueData[idx].time,
-        value: isNaN(value) ? null : value * scaleFactor,
-        color: value >= 0 ? '#26a69a' : '#ef5350'
-      })).filter(d => d.value !== null);
-
-      macdSeries.setData(macdLineData);
-      signalSeries.setData(signalLineData);
-      histogramSeries.setData(histogramSeriesData);
-
-      // Also update the real-time update scaling factor
-      if (macdSeries && signalSeries && histogramSeries) {
-        const lastMACD = {
-          time: uniqueData[uniqueData.length - 1].time,
-          value: fastLine[fastLine.length - 1]
-        };
-
-        const lastSignal = {
-          time: uniqueData[uniqueData.length - 1].time,
-          value: slowLine[slowLine.length - 1]
-        };
-
-        const lastHistogram = {
-          time: uniqueData[uniqueData.length - 1].time,
-          value: histogramData[histogramData.length - 1] * scaleFactor,
-          color: histogramData[histogramData.length - 1] >= 0 ? '#26a69a' : '#ef5350'
-        };
-
-        macdSeries.update(lastMACD);
-        signalSeries.update(lastSignal);
-        histogramSeries.update(lastHistogram);
-      }
-
-    } else {
-      // Handle other strategies
-      const colors = ['#2962FF', '#FF6B6B'];
-        selectedStrategy.indicators.forEach((indicator, index) => {
-          const lineSeries = chart.addLineSeries({
-            color: colors[index],
-            lineWidth: 2,
-            title: indicator.name,
-            priceFormat: {
-              type: 'price',
-              precision: getDecimalPlaces(baseToken),
-              minMove: getMinMove(baseToken),
-            },
-          });
-          indicatorSeriesRefs.current.set(indicator.name, lineSeries);
-
-        const lineData = (index === 0 ? fastLine : slowLine)
-          .map((value, idx) => ({
-            time: uniqueData[idx].time,
-            value: isNaN(value) ? null : value
-          }))
-          .filter(d => d.value !== null)
-          .sort((a, b) => (a.time as number) - (b.time as number));
-
-          lineSeries.setData(lineData);
-        });
-    }
-
-    // Create marker series
-    markerSeriesRef.current = chart.addLineSeries({
-      lastValueVisible: false,
-      priceLineVisible: false,
-      crosshairMarkerVisible: false,
-      lineVisible: false,
-      lineWidth: 1 as LineWidth,
-      color: 'rgba(0, 0, 0, 0)',
-      priceScaleId: 'right', // Always use right scale for markers
-    });
-
-    // Find and set signals
-    const signals = [];
-    for (let i = 1; i < uniqueData.length; i++) {
-      const signal = checkForSignal(
-        fastLine[i - 1],
-        slowLine[i - 1],
-        fastLine[i],
-        slowLine[i],
-        uniqueData[i],
-        uniqueData.slice(Math.max(0, i - 10), i + 1)
-      );
-      if (signal) {
-        signals.push(signal);
-      }
-    }
-
-    if (signals.length > 0) {
-      const sortedSignals = signals.sort((a, b) => (a.time as number) - (b.time as number));
-      markerSeriesRef.current.setMarkers(sortedSignals);
-      markerSeriesRef.current.setData(sortedSignals.map(signal => ({
-        time: signal.time,
-        value: signal.value
-      })));
-    }
-  };
-
-  // Modify the real-time signal check
-  const checkRealTimeSignal = (data: any[]) => {
-    if (!markerSeriesRef.current || data.length < 2) return;
-
-    // Ensure data is sorted and deduplicated
-    const uniqueData = Array.from(new Map(data.map(item => [item.time, item])).values())
-      .sort((a, b) => (a.time as number) - (b.time as number));
-
-    const prices = uniqueData.map(d => d.close);
-    let fastLine: number[] = [];
-    let slowLine: number[] = [];
-    let histogramData: number[] = [];
-
-    // Calculate indicators based on strategy type
-    if (strategy === 'macd_crossover') {
-      const macdData = calculateMACD(prices);
-      fastLine = macdData.macd;
-      slowLine = macdData.signal;
-      histogramData = macdData.histogram;
-
-      // Update MACD series if they exist
-      const macdSeries = indicatorSeriesRefs.current.get('MACD');
-      const signalSeries = indicatorSeriesRefs.current.get('Signal');
-      const histogramSeries = indicatorSeriesRefs.current.get('Histogram');
-
-      if (macdSeries && signalSeries && histogramSeries) {
-        // Scale histogram values with dynamic scaling
-        const maxHistogram = Math.max(...histogramData.map(Math.abs));
-        const scaleFactor = getHistogramScaleFactor(timeframe, maxHistogram);
-
-        const lastMACD = {
-          time: uniqueData[uniqueData.length - 1].time,
-          value: fastLine[fastLine.length - 1]
-        };
-
-        const lastSignal = {
-          time: uniqueData[uniqueData.length - 1].time,
-          value: slowLine[slowLine.length - 1]
-        };
-
-        const lastHistogram = {
-          time: uniqueData[uniqueData.length - 1].time,
-          value: histogramData[histogramData.length - 1] * scaleFactor,
-          color: histogramData[histogramData.length - 1] >= 0 ? '#26a69a' : '#ef5350'
-        };
-
-        macdSeries.update(lastMACD);
-        signalSeries.update(lastSignal);
-        histogramSeries.update(lastHistogram);
-      }
-    } else {
-      switch (strategy) {
-        case 'ema_crossover':
-          fastLine = calculateEMA(prices, 9);
-          slowLine = calculateEMA(prices, 21);
-          break;
-        case 'sma_crossover':
-          fastLine = calculateSMA(prices, 9);
-          slowLine = calculateSMA(prices, 21);
-          break;
-        case 'tema_crossover':
-          fastLine = calculateTEMA(prices, 7);
-          slowLine = calculateTEMA(prices, 21);
-          break;
-        case 'golden_cross':
-          fastLine = calculateSMA(prices, 50);
-          slowLine = calculateSMA(prices, 200);
-          break;
-        case 'hull_crossover':
-          fastLine = calculateHMA(prices, 9);
-          slowLine = calculateHMA(prices, 21);
-          break;
-        case 'ema_5_13':
-          fastLine = calculateEMA(prices, 5);
-          slowLine = calculateEMA(prices, 13);
-          break;
-      }
-    }
-
-    const signal = checkForSignal(
-      fastLine[fastLine.length - 2],
-      slowLine[slowLine.length - 2],
-      fastLine[fastLine.length - 1],
-      slowLine[slowLine.length - 1],
-      uniqueData[uniqueData.length - 1],
-      uniqueData.slice(-10)
-    );
-
-    if (signal) {
-      const existingMarkers = markerSeriesRef.current.markers() || [];
-      const newMarkers = [...existingMarkers, signal]
-        .sort((a, b) => (a.time as number) - (b.time as number));
-      
-      console.log(`Adding real-time ${signal.text} signal`);
-      markerSeriesRef.current.setMarkers(newMarkers);
-      
-      // Update marker series data
-      markerSeriesRef.current.setData(newMarkers.map(marker => ({
-        time: marker.time,
-        value: marker.value
-      })));
-    }
-  };
-
-  // Price format configuration
-  const getPriceFormat = useCallback((baseToken: string) => {
-    const btcPair = isBTCPair(baseToken);
-    return {
-      type: 'price' as const,
-      precision: btcPair ? 8 : 2,
-      minMove: btcPair ? 0.00000001 : 0.01,
-      format: (price: number) => {
-        if (typeof price !== 'number' || isNaN(price)) {
-          return btcPair ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
-        }
-        return price.toFixed(btcPair ? 8 : 2);
-      }
-    };
-  }, []);
+  // Handle trading pair change
+  const handlePairChange = useCallback((newToken: string, newBaseToken: string) => {
+    onPairChange(newToken, newBaseToken);
+    setCurrentBaseToken(newBaseToken);
+  }, [onPairChange]);
 
   // Function to update price stats
   const updatePriceStats = useCallback((data: any[]) => {
@@ -578,12 +112,9 @@ export function CandlestickChart({
     const change7d = getPercentChange(last7d);
     
     // Format prices using the price format utility
-    const formatPriceWithCurrentBase = (price: number) => formatPrice(price, currentBaseToken);
-
-    // Update state with formatted values
-    const formattedCurrentPrice = formatPriceWithCurrentBase(currentPrice);
-    const formattedHigh = formatPriceWithCurrentBase(high24h);
-    const formattedLow = formatPriceWithCurrentBase(low24h);
+    const formattedCurrentPrice = formatPrice(currentPrice, currentBaseToken);
+    const formattedHigh = formatPrice(high24h, currentBaseToken);
+    const formattedLow = formatPrice(low24h, currentBaseToken);
 
     setCurrentPrice(formattedCurrentPrice);
     setPriceStats({
@@ -595,28 +126,103 @@ export function CandlestickChart({
     });
   }, [currentBaseToken]);
 
+  // Function to add strategy indicators
+  const addStrategyIndicators = useCallback((chart: IChartApi, data: any[]) => {
+    // Clear any existing indicators
+    indicatorSeriesRefs.current.forEach(series => {
+      try {
+        if (series && chart) {
+          chart.removeSeries(series);
+        }
+      } catch (e) {
+        console.error('Error removing series:', e);
+      }
+    });
+    indicatorSeriesRefs.current.clear();
+
+    if (markerSeriesRef.current) {
+      try {
+        chart.removeSeries(markerSeriesRef.current);
+      } catch (e) {
+        console.error('Error removing marker series:', e);
+      }
+      markerSeriesRef.current = null;
+    }
+
+    if (strategy === 'none') return;
+
+    // Calculate indicators based on strategy
+    const prices = data.map(d => d.close);
+    let fastLine: number[] = [];
+    let slowLine: number[] = [];
+
+    switch (strategy) {
+      case 'ema_crossover':
+        fastLine = calculateEMA(prices, 9);
+        slowLine = calculateEMA(prices, 21);
+        break;
+      case 'sma_crossover':
+        fastLine = calculateSMA(prices, 9);
+        slowLine = calculateSMA(prices, 21);
+        break;
+      case 'tema_crossover':
+        fastLine = calculateTEMA(prices, 7);
+        slowLine = calculateTEMA(prices, 21);
+        break;
+      case 'golden_cross':
+        fastLine = calculateSMA(prices, 50);
+        slowLine = calculateSMA(prices, 200);
+        break;
+      case 'hull_crossover':
+        fastLine = calculateHMA(prices, 9);
+        slowLine = calculateHMA(prices, 21);
+        break;
+      case 'ema_5_13':
+        fastLine = calculateEMA(prices, 5);
+        slowLine = calculateEMA(prices, 13);
+        break;
+      case 'macd_crossover':
+        const macdData = calculateMACD(prices);
+        fastLine = macdData.macd;
+        slowLine = macdData.signal;
+        break;
+    }
+
+    // Add indicator lines
+    const selectedStrategy = getStrategy(strategy);
+    if (!selectedStrategy) return;
+
+    const colors = ['#2962FF', '#FF6B6B'];
+    selectedStrategy.indicators.forEach((indicator, index) => {
+      const lineSeries = chart.addLineSeries({
+        color: colors[index],
+        lineWidth: 2,
+        title: indicator.name,
+        priceFormat: {
+          type: 'price',
+          precision: isBTCPair(currentBaseToken) ? 8 : 2,
+          minMove: isBTCPair(currentBaseToken) ? 0.00000001 : 0.01,
+        },
+      });
+      indicatorSeriesRefs.current.set(indicator.name, lineSeries);
+
+      const lineData = (index === 0 ? fastLine : slowLine)
+        .map((value, idx) => ({
+          time: data[idx].time,
+          value: isNaN(value) ? null : value
+        }))
+        .filter(d => d.value !== null);
+
+      lineSeries.setData(lineData);
+    });
+  }, [strategy, currentBaseToken]);
+
   // Effect for strategy changes
   useEffect(() => {
     if (chartRef.current && historicalDataRef.current.length > 0) {
       addStrategyIndicators(chartRef.current, historicalDataRef.current);
     }
-  }, [strategy]);
-
-  // Create series with price format
-  const createSeriesWithFormat = useCallback((
-    chart: IChartApi,
-    options: any,
-    priceFormat: any
-  ) => {
-    return chart.addCandlestickSeries({
-      ...options,
-      priceFormat: {
-        type: priceFormat.type,
-        precision: priceFormat.precision,
-        minMove: priceFormat.minMove,
-      },
-    });
-  }, []);
+  }, [strategy, addStrategyIndicators]);
 
   // Main chart initialization effect
   useEffect(() => {
@@ -667,8 +273,8 @@ export function CandlestickChart({
       wickDownColor: '#ef5350',
       priceFormat: {
         type: 'price',
-        precision: getDecimalPlaces(currentBaseToken),
-        minMove: getMinMove(currentBaseToken),
+        precision: isBTCPair(currentBaseToken) ? 8 : 2,
+        minMove: isBTCPair(currentBaseToken) ? 0.00000001 : 0.01,
       },
     });
 
@@ -749,96 +355,12 @@ export function CandlestickChart({
 
     window.addEventListener('resize', handleResize);
 
-    // Remove TradingView logo elements
-    const removeTradingViewLogo = () => {
-      const logoElement = document.getElementById('tv-attr-logo');
-      if (logoElement) {
-        logoElement.remove();
-      }
-
-      const headerLogo = document.querySelector('.tv-header__link');
-      if (headerLogo) {
-        headerLogo.remove();
-      }
-    };
-
-    // Run logo removal after chart is created and after a delay
-    removeTradingViewLogo();
-    const logoTimeoutId = setTimeout(removeTradingViewLogo, 100);
-
-    // Function to create indicator series with correct price format
-    const createIndicatorSeries = (
-      type: 'line' | 'histogram',
-      options: any
-    ) => {
-      const priceConfig = getPriceFormat(baseToken);
-      const seriesOptions = {
-        ...options,
-        priceFormat: {
-          type: 'price',
-          precision: priceConfig.precision,
-          minMove: priceConfig.minMove,
-        },
-      };
-
-      return type === 'line' 
-        ? chart.addLineSeries(seriesOptions)
-        : chart.addHistogramSeries(seriesOptions);
-    };
-
-    // Add MACD series with proper price formatting
-    if (strategy === 'macd_crossover') {
-      const macdSeries = createIndicatorSeries('line', {
-        color: '#2962FF',
-        lineWidth: 2,
-        title: 'MACD',
-        priceScaleId: 'overlay',
-      });
-
-      const signalSeries = createIndicatorSeries('line', {
-        color: '#FF6B6B',
-        lineWidth: 2,
-        title: 'Signal',
-        priceScaleId: 'overlay',
-      });
-
-      const histogramSeries = createIndicatorSeries('histogram', {
-        color: '#26a69a',
-        title: 'Histogram',
-        priceScaleId: 'overlay',
-        base: 0,
-      });
-
-      indicatorSeriesRefs.current.set('MACD', macdSeries);
-      indicatorSeriesRefs.current.set('Signal', signalSeries);
-      indicatorSeriesRefs.current.set('Histogram', histogramSeries);
-    }
-
     return () => {
       window.removeEventListener('resize', handleResize);
-      clearTimeout(logoTimeoutId);
       unsubscribe();
       chart.remove();
     };
-  }, [timeframe, currentBaseToken]);
-
-  // Handle trading pair change
-  const handlePairChange = useCallback((newToken: string, newBaseToken: string) => {
-    onPairChange(newToken, newBaseToken);
-    setCurrentBaseToken(newBaseToken);
-    
-    // Reset price states with correct format for the new base token
-    const defaultPrice = isBTCPair(newBaseToken) ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
-    
-    setCurrentPrice(defaultPrice);
-    setPriceStats({
-      change1h: '0.00',
-      change24h: '0.00',
-      change7d: '0.00',
-      high24h: defaultPrice,
-      low24h: defaultPrice
-    });
-  }, [onPairChange]);
+  }, [timeframe, currentBaseToken, strategy, token, updatePriceStats, addStrategyIndicators]);
 
   return (
     <div className="flex flex-col w-full h-full">
