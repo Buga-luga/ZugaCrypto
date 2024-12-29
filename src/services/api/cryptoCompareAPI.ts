@@ -1,309 +1,150 @@
-import { Time, UTCTimestamp } from 'lightweight-charts';
-
-// WARNING: This is the production Bitcoin price feed implementation.
-// This file contains critical real-time data functionality.
-// DO NOT modify this implementation or replace it with sample data.
-// The WebSocket connection and historical data fetching are working correctly.
-
-interface PriceData {
-  time: UTCTimestamp;
-  value: number;
-}
-
-interface TradeData {
-  time: UTCTimestamp;
-  price: number;
-  volume24h: number;
-}
-
-export type TimeframeConfig = {
-  endpoint: string;
-  limit: number;
-  interval: number;
-}
-
 export type Timeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
 
-const TIMEFRAME_CONFIG: Record<Timeframe, TimeframeConfig> = {
-  '1m': { endpoint: 'histominute', limit: 1440, interval: 60 },
-  '5m': { endpoint: 'histominute', limit: 1440, interval: 300 },
-  '15m': { endpoint: 'histominute', limit: 1440, interval: 900 },
-  '30m': { endpoint: 'histominute', limit: 1440, interval: 1800 },
-  '1h': { endpoint: 'histohour', limit: 720, interval: 3600 },
-  '4h': { endpoint: 'histohour', limit: 720, interval: 14400 },
-  '1d': { endpoint: 'histoday', limit: 365, interval: 86400 },
-  '1w': { endpoint: 'histoday', limit: 365, interval: 604800 }
-};
+const API_KEY = process.env.NEXT_PUBLIC_CRYPTOCOMPARE_API_KEY;
+const BASE_URL = 'https://min-api.cryptocompare.com/data';
 
-let socket: WebSocket | null = null;
-let priceUpdateCallbacks: ((data: PriceData) => void)[] = [];
-let tradeUpdateCallbacks: ((data: TradeData) => void)[] = [];
-let pendingSubscription = false;
-let lastPrice = 0;
-let reconnectAttempts = 0;
-let currentTimeframe: Timeframe = '1m';
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_DELAY = 2000;
+// Helper function to get the interval string for CryptoCompare API
+function getIntervalString(timeframe: Timeframe): string {
+  switch (timeframe) {
+    case '1m': return 'histominute';
+    case '5m': return 'histominute';
+    case '15m': return 'histominute';
+    case '30m': return 'histominute';
+    case '1h': return 'histohour';
+    case '4h': return 'histohour';
+    case '1d': return 'histoday';
+    case '1w': return 'histoday';
+    default: return 'histominute';
+  }
+}
 
-// Fallback to REST API when WebSocket fails
-async function fetchPriceUpdate() {
+// Helper function to get the limit based on timeframe
+function getLimit(timeframe: Timeframe): number {
+  switch (timeframe) {
+    case '1m': return 1440; // 24 hours
+    case '5m': return 288; // 24 hours
+    case '15m': return 96; // 24 hours
+    case '30m': return 48; // 24 hours
+    case '1h': return 168; // 7 days
+    case '4h': return 180; // 30 days
+    case '1d': return 365; // 1 year
+    case '1w': return 52; // 1 year
+    default: return 1440;
+  }
+}
+
+// Helper function to get the aggregate based on timeframe
+function getAggregate(timeframe: Timeframe): number {
+  switch (timeframe) {
+    case '1m': return 1;
+    case '5m': return 5;
+    case '15m': return 15;
+    case '30m': return 30;
+    case '1h': return 1;
+    case '4h': return 4;
+    case '1d': return 1;
+    case '1w': return 7;
+    default: return 1;
+  }
+}
+
+export async function getHistoricalData(timeframe: Timeframe, token: string = 'BTC', baseToken: string = 'USDT'): Promise<any[]> {
   try {
-    const response = await fetch('https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD');
-    const data = await response.json();
-    const price = data.USD;
-    const timestamp = Math.floor(Date.now() / 1000) as UTCTimestamp;
+    const interval = getIntervalString(timeframe);
+    const limit = getLimit(timeframe);
+    const aggregate = getAggregate(timeframe);
 
-    if (price && !isNaN(price) && price !== lastPrice) {
-      lastPrice = price;
-      priceUpdateCallbacks.forEach(callback => callback({
-        time: timestamp,
-        value: price
-      }));
+    const response = await fetch(
+      `${BASE_URL}/${interval}?fsym=${token}&tsym=${baseToken}&limit=${limit}&aggregate=${aggregate}&api_key=${API_KEY}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-  } catch (error) {
-    console.error('Error fetching price via REST:', error);
-  }
-}
 
-function sendSubscription(ws: WebSocket) {
-  const subscribeMsg = {
-    "action": "SubAdd",
-    "subs": [
-      "5~CCCAGG~BTC~USD",       // Aggregate index (most frequent)
-      "2~Coinbase~BTC~USD",     // Coinbase ticker
-      "11~BTC~USD"              // Direct price feed
-    ]
-  };
-  
-  try {
-    ws.send(JSON.stringify(subscribeMsg));
-    console.log('Subscribed to price feeds');
-    pendingSubscription = false;
-  } catch (error) {
-    console.error('Error sending subscription:', error);
-    pendingSubscription = true;
-  }
-}
-
-// Update the WebSocket message handler to respect timeframes
-function handlePriceUpdate(price: number, timestamp: UTCTimestamp, timeframe: Timeframe) {
-  const config = TIMEFRAME_CONFIG[timeframe];
-  const interval = config.interval;
-  
-  // Align timestamp to the current timeframe interval
-  const alignedTimestamp = Math.floor(timestamp / interval) * interval as UTCTimestamp;
-  
-  if (price && !isNaN(price) && price !== lastPrice) {
-    lastPrice = price;
+    const data = await response.json();
     
-    priceUpdateCallbacks.forEach(callback => callback({
-      time: alignedTimestamp,
-      value: price
+    if (data.Response === 'Error') {
+      throw new Error(data.Message);
+    }
+
+    return data.Data.map((d: any) => ({
+      time: d.time,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+      volume: d.volumefrom
     }));
-
-    if (tradeUpdateCallbacks.length > 0) {
-      tradeUpdateCallbacks.forEach(callback => callback({
-        time: alignedTimestamp,
-        price: price,
-        volume24h: 0 // Volume will be updated separately
-      }));
-    }
-  }
-}
-
-function connectWebSocket() {
-  if (socket?.readyState === WebSocket.OPEN) {
-    if (pendingSubscription) {
-      sendSubscription(socket);
-    }
-    return;
-  }
-
-  // Don't try to reconnect too many times
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-    console.log('Max reconnection attempts reached, falling back to REST API');
-    // Set up periodic REST API polling as fallback
-    const pollInterval = setInterval(fetchPriceUpdate, 5000);
-    return;
-  }
-
-  try {
-    // Close existing socket if any
-    if (socket) {
-      socket.close();
-      socket = null;
-    }
-
-    socket = new WebSocket('wss://streamer.cryptocompare.com/v2');
-
-    socket.onopen = () => {
-      console.log('Connected to CryptoCompare WebSocket');
-      reconnectAttempts = 0; // Reset attempts on successful connection
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        sendSubscription(socket);
-      } else {
-        pendingSubscription = true;
-      }
-    };
-
-    socket.onmessage = (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.TYPE === "20" && data.MESSAGE === "SUBSCRIBECOMPLETE") {
-          console.log('Successfully subscribed to feeds');
-          return;
-        }
-
-        const timestamp = Math.floor(Date.now() / 1000) as UTCTimestamp;
-        let price: number | null = null;
-
-        if (data.TYPE === "11" || data.TYPE === "2" || data.TYPE === "5") {
-          price = parseFloat(data.PRICE);
-          if (price && !isNaN(price)) {
-            handlePriceUpdate(price, timestamp, currentTimeframe);
-          }
-        }
-      } catch (error) {
-        console.error('Error processing message:', error);
-      }
-    };
-
-    socket.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      reconnectAttempts++;
-      reconnect();
-    };
-
-    socket.onclose = (event) => {
-      console.log(`WebSocket closed with code ${event.code}, reason: ${event.reason}`);
-      reconnect();
-    };
-
-    // Ping every 15 seconds to keep connection alive
-    const pingInterval = setInterval(() => {
-      if (socket?.readyState === WebSocket.OPEN) {
-        try {
-          socket.send(JSON.stringify({ "action": "PING" }));
-        } catch (error) {
-          console.error('Error sending ping:', error);
-          reconnect();
-        }
-      }
-    }, 15000);
-
-    // Clean up ping interval on socket close
-    socket.addEventListener('close', () => clearInterval(pingInterval));
-
-  } catch (error) {
-    console.error('Error creating WebSocket:', error);
-    reconnectAttempts++;
-    setTimeout(connectWebSocket, RECONNECT_DELAY);
-  }
-}
-
-function reconnect() {
-  if (socket) {
-    try {
-      socket.close();
-    } catch (error) {
-      console.error('Error closing socket:', error);
-    }
-    socket = null;
-  }
-  setTimeout(connectWebSocket, RECONNECT_DELAY * Math.min(reconnectAttempts, 5));
-}
-
-export function subscribeToPrice(callback: (data: PriceData) => void, timeframe: Timeframe = '1m') {
-  currentTimeframe = timeframe;
-  priceUpdateCallbacks.push(callback);
-  
-  // Immediately get current price via REST API
-  getCurrentPrice().then(price => {
-    const timestamp = Math.floor(Date.now() / 1000) as UTCTimestamp;
-    callback({
-      time: timestamp,
-      value: price
-    });
-  }).catch(console.error);
-  
-  // If this is the first subscriber, connect to WebSocket
-  if (priceUpdateCallbacks.length === 1) {
-    connectWebSocket();
-  }
-  
-  return () => {
-    priceUpdateCallbacks = priceUpdateCallbacks.filter(cb => cb !== callback);
-    if (priceUpdateCallbacks.length === 0 && tradeUpdateCallbacks.length === 0 && socket) {
-      socket.close();
-      socket = null;
-    }
-  };
-}
-
-export function subscribeToTrades(callback: (data: TradeData) => void) {
-  tradeUpdateCallbacks.push(callback);
-  
-  // If this is the first subscriber, connect to WebSocket
-  if (tradeUpdateCallbacks.length === 1 && priceUpdateCallbacks.length === 0) {
-    connectWebSocket();
-  }
-  
-  return () => {
-    tradeUpdateCallbacks = tradeUpdateCallbacks.filter(cb => cb !== callback);
-    if (priceUpdateCallbacks.length === 0 && tradeUpdateCallbacks.length === 0 && socket) {
-      socket.close();
-      socket = null;
-    }
-  };
-}
-
-export async function getCurrentPrice(): Promise<number> {
-  try {
-    const response = await fetch('https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD');
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const data = await response.json();
-    return data.USD;
-  } catch (error) {
-    console.error('Error fetching price:', error);
-    throw error;
-  }
-}
-
-export async function getHistoricalData(timeframe: Timeframe = '1m'): Promise<any[]> {
-  try {
-    const config = TIMEFRAME_CONFIG[timeframe];
-    const endTime = Math.floor(Date.now() / 1000);
-    
-    // Calculate the appropriate aggregate parameter based on timeframe
-    let aggregate = 1;
-    if (config.endpoint === 'histominute') {
-      aggregate = config.interval / 60;
-    } else if (config.endpoint === 'histohour') {
-      aggregate = config.interval / 3600;
-    } else if (config.endpoint === 'histoday') {
-      aggregate = config.interval / 86400;
-    }
-
-    const url = `https://min-api.cryptocompare.com/data/v2/${config.endpoint}?fsym=BTC&tsym=USD&limit=${config.limit}&toTs=${endTime}&aggregate=${aggregate}`;
-    
-    console.log(`Fetching historical data for ${timeframe} timeframe...`);
-    const response = await fetch(url);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    if (!data.Data?.Data) {
-      throw new Error('Invalid data format received from API');
-    }
-
-    return data.Data.Data;
   } catch (error) {
     console.error('Error fetching historical data:', error);
-    throw error;
+    return [];
+  }
+}
+
+export function subscribeToPrice(callback: (data: { time: number; value: number }) => void, timeframe: Timeframe, token: string = 'BTC', baseToken: string = 'USDT'): () => void {
+  const ws = new WebSocket('wss://streamer.cryptocompare.com/v2');
+  const subscription = `5~CCCAGG~${token}~${baseToken}`;
+
+  ws.onopen = () => {
+    const subscribeMsg = {
+      "action": "SubAdd",
+      "subs": [subscription]
+    };
+    ws.send(JSON.stringify(subscribeMsg));
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.TYPE === "5" && data.PRICE) { // Type 5 is trade
+        const price = parseFloat(data.PRICE);
+        const timestamp = Math.floor(Date.now() / 1000);
+        callback({ time: timestamp, value: price });
+      }
+    } catch (error) {
+      console.error('Error processing message:', error);
+    }
+  };
+
+  ws.onerror = (error) => {
+    console.error('WebSocket error:', error);
+  };
+
+  // Keep connection alive with ping
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ "action": "PING" }));
+    }
+  }, 15000);
+
+  return () => {
+    clearInterval(pingInterval);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        "action": "SubRemove",
+        "subs": [subscription]
+      }));
+      ws.close();
+    }
+  };
+}
+
+// Helper function to validate if a trading pair is supported
+export async function isPairSupported(token: string, baseToken: string): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${BASE_URL}/price?fsym=${token}&tsyms=${baseToken}&api_key=${API_KEY}`
+    );
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const data = await response.json();
+    return !data.Response || data.Response !== 'Error';
+  } catch (error) {
+    console.error('Error checking pair support:', error);
+    return false;
   }
 } 

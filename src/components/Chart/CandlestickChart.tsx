@@ -18,7 +18,8 @@ interface CandlestickChartProps {
   strategy: StrategyId;
   token?: string;
   baseToken?: string;
-  exchange?: 'cryptocompare' | 'binance' | 'coinbase';
+  exchange?: string;
+  onPairChange?: (token: string, baseToken: string) => void;
 }
 
 interface Candle {
@@ -33,11 +34,12 @@ export function CandlestickChart({
   timeframe, 
   strategy, 
   token = 'BTC', 
-  baseToken: initialBaseToken = 'USDT', 
-  exchange: initialExchange = 'cryptocompare' 
+  baseToken = 'USDT',
+  exchange = 'CryptoCompare',
+  onPairChange = () => {} 
 }: CandlestickChartProps) {
-  const [exchange, setExchange] = useState(initialExchange);
-  const [baseToken, setBaseToken] = useState(initialBaseToken);
+  const [selectedExchange, setSelectedExchange] = useState(exchange);
+  const [selectedBaseToken, setSelectedBaseToken] = useState(baseToken);
   const [currentPrice, setCurrentPrice] = useState<string>('Loading...');
   const [priceStats, setPriceStats] = useState({
     change24h: '—',
@@ -78,6 +80,29 @@ export function CandlestickChart({
     }
   };
 
+  // Function to get appropriate decimal places based on base token
+  const getDecimalPlaces = (baseToken: string): number => {
+    return baseToken === 'BTC' ? 8 : 2;
+  };
+
+  // Function to get appropriate min move based on base token
+  const getMinMove = (baseToken: string): number => {
+    return baseToken.toUpperCase() === 'BTC' ? 0.00000001 : 0.01;
+  };
+
+  // Function to format price based on base token
+  const formatPrice = (price: number, baseToken: string): string => {
+    if (baseToken === 'BTC') {
+      return price.toFixed(8);  // Show 8 decimal places for BTC pairs
+    }
+    return price.toFixed(2);    // Show 2 decimal places for other pairs
+  };
+
+  // Function to format signal text
+  const formatSignalText = (type: string, price: number, baseToken: string): string => {
+    return `${type} ${formatPrice(price, baseToken)}`;
+  };
+
   // Function to check for crossover signals
   const checkForSignal = (
     prevFast: number,
@@ -89,60 +114,54 @@ export function CandlestickChart({
   ) => {
     if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
       if (strategy === 'macd_crossover') {
-        // For MACD, we want signals based on histogram crossovers
         const prevHistogram = prevFast - prevSlow;
         const currHistogram = currFast - currSlow;
         
-        // Buy signal: Histogram crosses above zero
         if (prevHistogram <= 0 && currHistogram > 0) {
           return {
             time: candle.time,
             position: 'belowBar',
             color: '#26a69a',
             shape: 'arrowUp',
-            text: `Buy ${candle.close.toFixed(2)}`,
+            text: formatSignalText('Buy', candle.close, baseToken),
             size: 2,
-            value: candle.low * 0.999, // Just below the candle
+            value: candle.low * 0.999,
           };
         }
-        // Sell signal: Histogram crosses below zero
         else if (prevHistogram >= 0 && currHistogram < 0) {
           return {
             time: candle.time,
             position: 'aboveBar',
             color: '#ef5350',
             shape: 'arrowDown',
-            text: `Sell ${candle.close.toFixed(2)}`,
+            text: formatSignalText('Sell', candle.close, baseToken),
             size: 2,
-            value: candle.high * 1.001, // Just above the candle
+            value: candle.high * 1.001,
           };
         }
       } else {
-        // Calculate average price and range for better positioning
         const avgPrice = data.reduce((sum, d) => sum + d.close, 0) / data.length;
         const priceRange = data.reduce((range, d) => Math.max(range, Math.abs(d.high - d.low)), 0);
         const offset = priceRange * 0.75;
 
-        // Buy signal: Fast crosses above Slow
         if (prevFast <= prevSlow && currFast > currSlow) {
           return {
             time: candle.time,
             position: 'belowBar',
             color: '#26a69a',
             shape: 'arrowUp',
-            text: `Buy ${candle.close.toFixed(2)}`,
+            text: formatSignalText('Buy', candle.close, baseToken),
             size: 2,
             value: Math.min(...data.slice(-10).map(d => d.low)) - offset,
           };
         }
-        // Sell signal: Fast crosses below Slow
         else if (prevFast >= prevSlow && currFast < currSlow) {
           return {
             time: candle.time,
             position: 'aboveBar',
             color: '#ef5350',
             shape: 'arrowDown',
-            text: `Sell ${candle.close.toFixed(2)}`,
+            text: formatSignalText('Sell', candle.close, baseToken),
             size: 2,
             value: Math.max(...data.slice(-10).map(d => d.high)) + offset,
           };
@@ -238,8 +257,8 @@ export function CandlestickChart({
         title: 'MACD',
         priceFormat: {
           type: 'price',
-          precision: 2,
-          minMove: 0.01,
+          precision: getDecimalPlaces(baseToken),
+          minMove: getMinMove(baseToken),
         },
         priceScaleId: 'overlay',
       });
@@ -250,8 +269,8 @@ export function CandlestickChart({
         title: 'Signal',
         priceFormat: {
           type: 'price',
-          precision: 2,
-          minMove: 0.01,
+          precision: getDecimalPlaces(baseToken),
+          minMove: getMinMove(baseToken),
         },
         priceScaleId: 'overlay',
       });
@@ -261,8 +280,8 @@ export function CandlestickChart({
         title: 'Histogram',
         priceFormat: {
           type: 'price',
-          precision: 2,
-          minMove: 0.01,
+          precision: getDecimalPlaces(baseToken),
+          minMove: getMinMove(baseToken),
         },
         priceScaleId: 'overlay',
         base: 0,
@@ -336,18 +355,18 @@ export function CandlestickChart({
     } else {
       // Handle other strategies
       const colors = ['#2962FF', '#FF6B6B'];
-      selectedStrategy.indicators.forEach((indicator, index) => {
-        const lineSeries = chart.addLineSeries({
-          color: colors[index],
-          lineWidth: 2,
-          title: indicator.name,
-          priceFormat: {
-            type: 'price',
-            precision: 2,
-            minMove: 0.01,
-          },
-        });
-        indicatorSeriesRefs.current.set(indicator.name, lineSeries);
+        selectedStrategy.indicators.forEach((indicator, index) => {
+          const lineSeries = chart.addLineSeries({
+            color: colors[index],
+            lineWidth: 2,
+            title: indicator.name,
+            priceFormat: {
+              type: 'price',
+              precision: getDecimalPlaces(baseToken),
+              minMove: getMinMove(baseToken),
+            },
+          });
+          indicatorSeriesRefs.current.set(indicator.name, lineSeries);
 
         const lineData = (index === 0 ? fastLine : slowLine)
           .map((value, idx) => ({
@@ -357,8 +376,8 @@ export function CandlestickChart({
           .filter(d => d.value !== null)
           .sort((a, b) => (a.time as number) - (b.time as number));
 
-        lineSeries.setData(lineData);
-      });
+          lineSeries.setData(lineData);
+        });
     }
 
     // Create marker series
@@ -515,24 +534,24 @@ export function CandlestickChart({
     const priceChange = ((currentPrice - openPrice) / openPrice) * 100;
     const changeColor = priceChange >= 0 ? 'text-[#26a69a]' : 'text-[#ef5350]';
 
-    setCurrentPrice(currentPrice.toFixed(2));
+    setCurrentPrice(formatPrice(currentPrice, baseToken));
     setPriceStats({
       change24h: `<span class="${changeColor}">${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%</span>`,
-      high24h: high24h.toFixed(2),
-      low24h: low24h.toFixed(2)
+      high24h: formatPrice(high24h, baseToken),
+      low24h: formatPrice(low24h, baseToken)
     });
 
-    // Update DOM elements
+    // Update DOM elements with correct decimal places
     const priceElement = document.getElementById('current-price');
     const changeElement = document.getElementById('price-change');
     const highElement = document.getElementById('24h-high');
     const lowElement = document.getElementById('24h-low');
 
-    if (priceElement) priceElement.textContent = currentPrice.toFixed(2);
+    if (priceElement) priceElement.textContent = formatPrice(currentPrice, baseToken);
     if (changeElement) changeElement.innerHTML = `<span class="${changeColor}">${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%</span>`;
-    if (highElement) highElement.textContent = high24h.toFixed(2);
-    if (lowElement) lowElement.textContent = low24h.toFixed(2);
-  }, []);
+    if (highElement) highElement.textContent = formatPrice(high24h, baseToken);
+    if (lowElement) lowElement.textContent = formatPrice(low24h, baseToken);
+  }, [baseToken]);
 
   // Effect for strategy changes
   useEffect(() => {
@@ -563,7 +582,7 @@ export function CandlestickChart({
         visible: true,
         scaleMargins: {
           top: 0.1,
-          bottom: 0.4, // Leave space for MACD
+          bottom: 0.4,
         },
       },
       width: chartContainerRef.current.clientWidth,
@@ -571,7 +590,6 @@ export function CandlestickChart({
     };
 
     const chart = createChart(chartContainerRef.current, chartOptions);
-
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#26a69a',
       downColor: '#ef5350',
@@ -579,7 +597,78 @@ export function CandlestickChart({
       wickUpColor: '#26a69a',
       wickDownColor: '#ef5350',
       priceScaleId: 'right',
+      priceFormat: {
+        type: 'price',
+        precision: baseToken === 'BTC' ? 8 : 2,
+        minMove: baseToken === 'BTC' ? 0.00000001 : 0.01,
+      },
     });
+
+    // Update price scale format
+    const priceScale = chart.priceScale('right');
+    if (priceScale) {
+      priceScale.applyOptions({
+        autoScale: true,
+        mode: 1,
+        invertScale: false,
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.4,
+        },
+      });
+    }
+
+    // Force update the series price format to ensure it takes effect
+    candlestickSeries.applyOptions({
+      priceFormat: {
+        type: 'price',
+        precision: baseToken === 'BTC' ? 8 : 2,
+        minMove: baseToken === 'BTC' ? 0.00000001 : 0.01,
+      },
+    });
+
+    // Add MACD series with proper price formatting
+    if (strategy === 'macd_crossover') {
+      const macdSeries = chart.addLineSeries({
+        color: '#2962FF',
+        lineWidth: 2,
+        title: 'MACD',
+        priceFormat: {
+          type: 'price',
+          precision: getDecimalPlaces(baseToken),
+          minMove: getMinMove(baseToken),
+        },
+        priceScaleId: 'overlay',
+      });
+
+      const signalSeries = chart.addLineSeries({
+        color: '#FF6B6B',
+        lineWidth: 2,
+        title: 'Signal',
+        priceFormat: {
+          type: 'price',
+          precision: getDecimalPlaces(baseToken),
+          minMove: getMinMove(baseToken),
+        },
+        priceScaleId: 'overlay',
+      });
+
+      const histogramSeries = chart.addHistogramSeries({
+        color: '#26a69a',
+        title: 'Histogram',
+        priceFormat: {
+          type: 'price',
+          precision: getDecimalPlaces(baseToken),
+          minMove: getMinMove(baseToken),
+        },
+        priceScaleId: 'overlay',
+        base: 0,
+      });
+
+      indicatorSeriesRefs.current.set('MACD', macdSeries);
+      indicatorSeriesRefs.current.set('Signal', signalSeries);
+      indicatorSeriesRefs.current.set('Histogram', histogramSeries);
+    }
 
     candlestickSeriesRef.current = candlestickSeries;
     chartRef.current = chart;
@@ -604,11 +693,20 @@ export function CandlestickChart({
     // Load initial data
     const loadData = async () => {
       try {
-        const data = await getHistoricalData(timeframe);
+        const data = await getHistoricalData(timeframe, token, baseToken);
         historicalDataRef.current = data;
         
+        // Update price format before setting data
+        candlestickSeries.applyOptions({
+          priceFormat: {
+            type: 'price',
+            precision: baseToken === 'BTC' ? 8 : 2,
+            minMove: baseToken === 'BTC' ? 0.00000001 : 0.01,
+          },
+        });
+        
         candlestickSeries.setData(data);
-        updatePriceStats(data); // Update price stats with historical data
+        updatePriceStats(data);
 
         if (strategy !== 'none') {
           addStrategyIndicators(chart, data);
@@ -679,7 +777,7 @@ export function CandlestickChart({
       if (historicalDataRef.current.length > 0) {
         updatePriceStats([...historicalDataRef.current, currentCandleRef.current]);
       }
-    }, timeframe);
+    }, timeframe, token, baseToken);
 
     // Handle window resize
     const handleResize = () => {
@@ -703,12 +801,21 @@ export function CandlestickChart({
 
   // Handle trading pair change
   const handlePairChange = useCallback((newToken: string, newBaseToken: string) => {
-    setBaseToken(newBaseToken);
+    onPairChange(newToken, newBaseToken); // Notify parent component
     // Reload data for new trading pair
     if (chartRef.current && candlestickSeriesRef.current) {
       const loadNewData = async () => {
         try {
-          const data = await getHistoricalData(timeframe);
+          // Update price format for new pair
+          candlestickSeriesRef.current.applyOptions({
+            priceFormat: {
+              type: 'price',
+              precision: newBaseToken === 'BTC' ? 8 : 2,
+              minMove: newBaseToken === 'BTC' ? 0.00000001 : 0.01,
+            },
+          });
+
+          const data = await getHistoricalData(timeframe, newToken, newBaseToken);
           historicalDataRef.current = data;
           
           candlestickSeriesRef.current.setData(data);
@@ -736,7 +843,7 @@ export function CandlestickChart({
 
       loadNewData();
     }
-  }, [timeframe, strategy, updatePriceStats]);
+  }, [timeframe, strategy, updatePriceStats, onPairChange]);
 
   return (
     <div className="flex flex-col w-full h-full">
@@ -744,7 +851,7 @@ export function CandlestickChart({
         token={token}
         baseToken={baseToken}
         exchange={exchange}
-        onExchangeChange={setExchange}
+        onExchangeChange={setSelectedExchange}
         onPairChange={handlePairChange}
       />
       <div ref={chartContainerRef} className="flex-1" />

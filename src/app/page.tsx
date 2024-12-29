@@ -10,8 +10,14 @@ import '@/services/strategies/registry';
 export default function Home() {
   const [timeframe, setTimeframe] = useState<Timeframe>('1m');
   const [strategy, setStrategy] = useState<StrategyId>('none');
-  const [token] = useState<string>('BTC');
-  const [exchange] = useState<'coinbase'>('coinbase');
+  const [token, setToken] = useState<string>('BTC');
+  const [baseToken, setBaseToken] = useState<string>('USDT');
+  const [exchange] = useState<'cryptocompare'>('cryptocompare');
+
+  const handlePairChange = (newToken: string, newBaseToken: string) => {
+    setToken(newToken);
+    setBaseToken(newBaseToken);
+  };
 
   return (
     <main className="flex flex-col h-screen bg-[#1E222D]">
@@ -20,7 +26,9 @@ export default function Home() {
           timeframe={timeframe} 
           strategy={strategy}
           token={token}
+          baseToken={baseToken}
           exchange={exchange}
+          onPairChange={handlePairChange}
         />
       </div>
       <div className="p-4 border-t border-[#2B2B43] flex flex-col gap-4">
