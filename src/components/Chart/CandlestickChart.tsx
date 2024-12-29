@@ -28,6 +28,7 @@ interface CandlestickChartProps {
   baseToken?: string;
   exchange?: string;
   onPairChange?: (token: string, baseToken: string) => void;
+  signals?: StrategySignal[];
 }
 
 interface Candle {
@@ -58,7 +59,8 @@ export function CandlestickChart({
   token = 'BTC', 
   baseToken = 'USDT',
   exchange = 'CryptoCompare',
-  onPairChange = () => {} 
+  onPairChange = () => {},
+  signals = []
 }: CandlestickChartProps) {
   const [selectedExchange, setSelectedExchange] = useState(exchange);
   const [currentBaseToken, setCurrentBaseToken] = useState(baseToken);
@@ -128,99 +130,140 @@ export function CandlestickChart({
 
   // Function to add strategy indicators
   const addStrategyIndicators = useCallback((chart: IChartApi, data: any[]) => {
-    // Clear any existing indicators
-    indicatorSeriesRefs.current.forEach(series => {
-      try {
-        if (series && chart) {
-          chart.removeSeries(series);
+    if (!chart) {
+      console.error('Chart is not initialized');
+      return;
+    }
+
+    try {
+      // Clear any existing indicators
+      indicatorSeriesRefs.current.forEach(series => {
+        try {
+          if (series && chart) {
+            chart.removeSeries(series);
+          }
+        } catch (e) {
+          console.error('Error removing series:', e);
         }
-      } catch (e) {
-        console.error('Error removing series:', e);
-      }
-    });
-    indicatorSeriesRefs.current.clear();
-
-    if (markerSeriesRef.current) {
-      try {
-        chart.removeSeries(markerSeriesRef.current);
-      } catch (e) {
-        console.error('Error removing marker series:', e);
-      }
-      markerSeriesRef.current = null;
-    }
-
-    if (strategy === 'none') return;
-
-    // Calculate indicators based on strategy
-    const prices = data.map(d => d.close);
-    let fastLine: number[] = [];
-    let slowLine: number[] = [];
-
-    switch (strategy) {
-      case 'ema_crossover':
-        fastLine = calculateEMA(prices, 9);
-        slowLine = calculateEMA(prices, 21);
-        break;
-      case 'sma_crossover':
-        fastLine = calculateSMA(prices, 9);
-        slowLine = calculateSMA(prices, 21);
-        break;
-      case 'tema_crossover':
-        fastLine = calculateTEMA(prices, 7);
-        slowLine = calculateTEMA(prices, 21);
-        break;
-      case 'golden_cross':
-        fastLine = calculateSMA(prices, 50);
-        slowLine = calculateSMA(prices, 200);
-        break;
-      case 'hull_crossover':
-        fastLine = calculateHMA(prices, 9);
-        slowLine = calculateHMA(prices, 21);
-        break;
-      case 'ema_5_13':
-        fastLine = calculateEMA(prices, 5);
-        slowLine = calculateEMA(prices, 13);
-        break;
-      case 'macd_crossover':
-        const macdData = calculateMACD(prices);
-        fastLine = macdData.macd;
-        slowLine = macdData.signal;
-        break;
-    }
-
-    // Add indicator lines
-    const selectedStrategy = getStrategy(strategy);
-    if (!selectedStrategy) return;
-
-    const colors = ['#2962FF', '#FF6B6B'];
-    selectedStrategy.indicators.forEach((indicator, index) => {
-      const lineSeries = chart.addLineSeries({
-        color: colors[index],
-        lineWidth: 2,
-        title: indicator.name,
-        priceFormat: {
-          type: 'price',
-          precision: isBTCPair(currentBaseToken) ? 8 : 2,
-          minMove: isBTCPair(currentBaseToken) ? 0.00000001 : 0.01,
-        },
       });
-      indicatorSeriesRefs.current.set(indicator.name, lineSeries);
+      indicatorSeriesRefs.current.clear();
 
-      const lineData = (index === 0 ? fastLine : slowLine)
-        .map((value, idx) => ({
-          time: data[idx].time,
-          value: isNaN(value) ? null : value
-        }))
-        .filter(d => d.value !== null);
+      if (markerSeriesRef.current) {
+        try {
+          chart.removeSeries(markerSeriesRef.current);
+        } catch (e) {
+          console.error('Error removing marker series:', e);
+        }
+        markerSeriesRef.current = null;
+      }
 
-      lineSeries.setData(lineData);
-    });
+      if (strategy === 'none') return;
+
+      // Calculate indicators based on strategy
+      const prices = data.map(d => d.close);
+      let fastLine: number[] = [];
+      let slowLine: number[] = [];
+
+      switch (strategy) {
+        case 'ema_crossover':
+          fastLine = calculateEMA(prices, 9);
+          slowLine = calculateEMA(prices, 21);
+          break;
+        case 'sma_crossover':
+          fastLine = calculateSMA(prices, 9);
+          slowLine = calculateSMA(prices, 21);
+          break;
+        case 'tema_crossover':
+          fastLine = calculateTEMA(prices, 7);
+          slowLine = calculateTEMA(prices, 21);
+          break;
+        case 'golden_cross':
+          fastLine = calculateSMA(prices, 50);
+          slowLine = calculateSMA(prices, 200);
+          break;
+        case 'hull_crossover':
+          fastLine = calculateHMA(prices, 9);
+          slowLine = calculateHMA(prices, 21);
+          break;
+        case 'ema_5_13':
+          fastLine = calculateEMA(prices, 5);
+          slowLine = calculateEMA(prices, 13);
+          break;
+      }
+
+      // Add indicator lines
+      const selectedStrategy = getStrategy(strategy);
+      if (!selectedStrategy) return;
+
+      const colors = ['#2962FF', '#FF6B6B'];
+      selectedStrategy.indicators.forEach((indicator, index) => {
+        const lineSeries = chart.addLineSeries({
+          color: colors[index],
+          lineWidth: 2,
+          title: indicator.name,
+          priceFormat: {
+            type: 'price',
+            precision: isBTCPair(currentBaseToken) ? 8 : 2,
+            minMove: isBTCPair(currentBaseToken) ? 0.00000001 : 0.01,
+          },
+        });
+        indicatorSeriesRefs.current.set(indicator.name, lineSeries);
+
+        const lineData = (index === 0 ? fastLine : slowLine)
+          .map((value, idx) => ({
+            time: data[idx].time,
+            value: isNaN(value) ? null : value
+          }))
+          .filter(d => d.value !== null);
+
+        lineSeries.setData(lineData);
+      });
+
+      // Add crossover signals with markers, text, and triangle shape
+      const markers = [];
+      for (let i = 1; i < data.length; i++) {
+        const prevFast = fastLine[i - 1];
+        const prevSlow = slowLine[i - 1];
+        const currFast = fastLine[i];
+        const currSlow = slowLine[i];
+
+        if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
+          if (prevFast <= prevSlow && currFast > currSlow) {
+            markers.push({
+              time: data[i].time,
+              position: 'belowBar',
+              color: '#26a69a',
+              shape: 'arrowUp',
+              text: 'Buy',
+            });
+          } else if (prevFast >= prevSlow && currFast < currSlow) {
+            markers.push({
+              time: data[i].time,
+              position: 'aboveBar',
+              color: '#ef5350',
+              shape: 'arrowDown',
+              text: 'Sell',
+            });
+          }
+        }
+      }
+
+      markerSeriesRef.current = markers;
+    } catch (error) {
+      console.error('Error adding strategy indicators:', error);
+    }
   }, [strategy, currentBaseToken]);
 
   // Effect for strategy changes
   useEffect(() => {
-    if (chartRef.current && historicalDataRef.current.length > 0) {
+    if (!chartRef.current || historicalDataRef.current.length === 0) {
+      return;
+    }
+    
+    try {
       addStrategyIndicators(chartRef.current, historicalDataRef.current);
+    } catch (error) {
+      console.error('Error in strategy change effect:', error);
     }
   }, [strategy, addStrategyIndicators]);
 
@@ -358,9 +401,38 @@ export function CandlestickChart({
     return () => {
       window.removeEventListener('resize', handleResize);
       unsubscribe();
-      chart.remove();
+      
+      // Clean up indicator series
+      if (chartRef.current) {
+        indicatorSeriesRefs.current.forEach(series => {
+          try {
+            chartRef.current?.removeSeries(series);
+          } catch (e) {
+            console.error('Error removing indicator series during cleanup:', e);
+          }
+        });
+        indicatorSeriesRefs.current.clear();
+        
+        if (markerSeriesRef.current) {
+          try {
+            chartRef.current.removeSeries(markerSeriesRef.current);
+          } catch (e) {
+            console.error('Error removing marker series during cleanup:', e);
+          }
+          markerSeriesRef.current = null;
+        }
+        
+        chart.remove();
+      }
     };
   }, [timeframe, currentBaseToken, strategy, token, updatePriceStats, addStrategyIndicators]);
+
+  // Ensure markers are set on the candlestick series
+  useEffect(() => {
+    if (candlestickSeriesRef.current && markerSeriesRef.current) {
+      candlestickSeriesRef.current.setMarkers(markerSeriesRef.current);
+    }
+  }, [markerSeriesRef.current]);
 
   return (
     <div className="flex flex-col w-full h-full">

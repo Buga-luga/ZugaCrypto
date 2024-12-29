@@ -6,7 +6,6 @@ export type StrategyId =
   | 'sma_crossover'
   | 'tema_crossover'
   | 'golden_cross'
-  | 'macd_crossover'
   | 'hull_crossover'
   | 'ema_5_13';
 
@@ -73,15 +72,6 @@ const strategies: Record<StrategyId, Strategy> = {
     indicators: [
       { name: 'SMA 50' },
       { name: 'SMA 200' },
-    ],
-  },
-  macd_crossover: {
-    id: 'macd_crossover',
-    name: 'MACD Crossover',
-    description: 'MACD line crosses Signal line (12/26/9)',
-    indicators: [
-      { name: 'MACD' },
-      { name: 'Signal' },
     ],
   },
   hull_crossover: {
