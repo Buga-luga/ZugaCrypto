@@ -1,6 +1,6 @@
 'use client';
 import { Time, IChartApi, ChartOptions, DeepPartial, LineWidth, BusinessDay, UTCTimestamp } from 'lightweight-charts';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart } from 'lightweight-charts';
 import { getHistoricalData, subscribeToPrice, Timeframe } from '@/services/api/cryptoCompareAPI';
 import { StrategyId, getStrategy } from '@/services/strategies';
@@ -11,12 +11,14 @@ import {
   calculateHMA,
   calculateMACD
 } from '@/services/strategies/moving-averages';
+import { TickerHeader } from './TickerHeader';
 
 interface CandlestickChartProps {
   timeframe: Timeframe;
   strategy: StrategyId;
-  token: string;
-  exchange: 'uniswap' | 'raydium' | 'coinbase';
+  token?: string;
+  baseToken?: string;
+  exchange?: 'cryptocompare' | 'binance' | 'coinbase';
 }
 
 interface Candle {
@@ -27,7 +29,21 @@ interface Candle {
   close: number;
 }
 
-export function CandlestickChart({ timeframe, strategy, token, exchange }: CandlestickChartProps) {
+export function CandlestickChart({ 
+  timeframe, 
+  strategy, 
+  token = 'BTC', 
+  baseToken: initialBaseToken = 'USDT', 
+  exchange: initialExchange = 'cryptocompare' 
+}: CandlestickChartProps) {
+  const [exchange, setExchange] = useState(initialExchange);
+  const [baseToken, setBaseToken] = useState(initialBaseToken);
+  const [currentPrice, setCurrentPrice] = useState<string>('Loading...');
+  const [priceStats, setPriceStats] = useState({
+    change24h: '—',
+    high24h: '—',
+    low24h: '—'
+  });
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<any>(null);
@@ -486,6 +502,38 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
     }
   };
 
+  // Function to update price stats
+  const updatePriceStats = useCallback((data: any[]) => {
+    if (data.length < 2) return;
+
+    const last24h = data.slice(-24); // Assuming hourly data
+    const currentPrice = last24h[last24h.length - 1].close;
+    const openPrice = last24h[0].open;
+    const high24h = Math.max(...last24h.map(d => d.high));
+    const low24h = Math.min(...last24h.map(d => d.low));
+    
+    const priceChange = ((currentPrice - openPrice) / openPrice) * 100;
+    const changeColor = priceChange >= 0 ? 'text-[#26a69a]' : 'text-[#ef5350]';
+
+    setCurrentPrice(currentPrice.toFixed(2));
+    setPriceStats({
+      change24h: `<span class="${changeColor}">${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%</span>`,
+      high24h: high24h.toFixed(2),
+      low24h: low24h.toFixed(2)
+    });
+
+    // Update DOM elements
+    const priceElement = document.getElementById('current-price');
+    const changeElement = document.getElementById('price-change');
+    const highElement = document.getElementById('24h-high');
+    const lowElement = document.getElementById('24h-low');
+
+    if (priceElement) priceElement.textContent = currentPrice.toFixed(2);
+    if (changeElement) changeElement.innerHTML = `<span class="${changeColor}">${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%</span>`;
+    if (highElement) highElement.textContent = high24h.toFixed(2);
+    if (lowElement) lowElement.textContent = low24h.toFixed(2);
+  }, []);
+
   // Effect for strategy changes
   useEffect(() => {
     if (chartRef.current && historicalDataRef.current.length > 0) {
@@ -560,6 +608,7 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
         historicalDataRef.current = data;
         
         candlestickSeries.setData(data);
+        updatePriceStats(data); // Update price stats with historical data
 
         if (strategy !== 'none') {
           addStrategyIndicators(chart, data);
@@ -625,6 +674,11 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
 
       // Update the chart with current candle
       candlestickSeriesRef.current.update(currentCandleRef.current);
+
+      // Update price stats with the latest data
+      if (historicalDataRef.current.length > 0) {
+        updatePriceStats([...historicalDataRef.current, currentCandleRef.current]);
+      }
     }, timeframe);
 
     // Handle window resize
@@ -647,5 +701,53 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
     };
   }, [timeframe]);
 
-  return <div ref={chartContainerRef} className="w-full h-full" />;
+  // Handle trading pair change
+  const handlePairChange = useCallback((newToken: string, newBaseToken: string) => {
+    setBaseToken(newBaseToken);
+    // Reload data for new trading pair
+    if (chartRef.current && candlestickSeriesRef.current) {
+      const loadNewData = async () => {
+        try {
+          const data = await getHistoricalData(timeframe);
+          historicalDataRef.current = data;
+          
+          candlestickSeriesRef.current.setData(data);
+          updatePriceStats(data);
+
+          if (strategy !== 'none') {
+            addStrategyIndicators(chartRef.current!, data);
+          }
+
+          // Initialize current candle from last historical candle
+          if (data.length > 0) {
+            const lastCandle = data[data.length - 1];
+            currentCandleRef.current = {
+              time: lastCandle.time,
+              open: lastCandle.close,
+              high: lastCandle.close,
+              low: lastCandle.close,
+              close: lastCandle.close
+            };
+          }
+        } catch (error) {
+          console.error('Error loading data:', error);
+        }
+      };
+
+      loadNewData();
+    }
+  }, [timeframe, strategy, updatePriceStats]);
+
+  return (
+    <div className="flex flex-col w-full h-full">
+      <TickerHeader
+        token={token}
+        baseToken={baseToken}
+        exchange={exchange}
+        onExchangeChange={setExchange}
+        onPairChange={handlePairChange}
+      />
+      <div ref={chartContainerRef} className="flex-1" />
+    </div>
+  );
 } 
