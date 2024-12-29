@@ -12,7 +12,7 @@ export default function Home() {
   const [strategy, setStrategy] = useState<StrategyId>('none');
   const [token, setToken] = useState<string>('BTC');
   const [baseToken, setBaseToken] = useState<string>('USDT');
-  const [exchange] = useState<'cryptocompare'>('cryptocompare');
+  const [exchange] = useState<'CryptoCompare'>('CryptoCompare');
 
   const handlePairChange = (newToken: string, newBaseToken: string) => {
     setToken(newToken);
