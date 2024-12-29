@@ -1,9 +1,8 @@
 'use client';
-import { Time, IChartApi, ChartOptions, DeepPartial, LineWidth, BusinessDay } from 'lightweight-charts';
+import { Time, IChartApi, ChartOptions, DeepPartial, LineWidth, BusinessDay, UTCTimestamp } from 'lightweight-charts';
 import { useEffect, useRef } from 'react';
 import { createChart } from 'lightweight-charts';
-import { getHistoricalData, subscribeToPrice } from '@/services/api/cryptoCompareAPI';
-import { Timeframe } from '@/services/api/cryptoCompareAPI';
+import { getHistoricalData, subscribeToPrice, Timeframe } from '@/services/api/cryptoCompareAPI';
 import { StrategyId, getStrategy } from '@/services/strategies';
 import { calculateEMA } from '@/services/strategies/ema-crossover';
 import { calculateSMA } from '@/services/strategies/sma-crossover';
@@ -11,9 +10,19 @@ import { calculateSMA } from '@/services/strategies/sma-crossover';
 interface CandlestickChartProps {
   timeframe: Timeframe;
   strategy: StrategyId;
+  token: string;
+  exchange: 'uniswap' | 'raydium' | 'coinbase';
 }
 
-export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps) {
+interface Candle {
+  time: Time;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export function CandlestickChart({ timeframe, strategy, token, exchange }: CandlestickChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<any>(null);
@@ -126,7 +135,13 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
       console.log('Setting up strategy:', selectedStrategy.id);
 
       // Create marker series for signals
-      markerSeriesRef.current = candlestickSeriesRef.current;  // Use the candlestick series for markers
+      markerSeriesRef.current = chart.addCandlestickSeries({
+        upColor: 'rgba(0,0,0,0)',
+        downColor: 'rgba(0,0,0,0)',
+        borderVisible: false,
+        wickUpColor: 'rgba(0,0,0,0)',
+        wickDownColor: 'rgba(0,0,0,0)',
+      });
 
       // Run strategy analysis and update indicators
       const prices = data.map(d => d.close);
@@ -340,16 +355,29 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
         const historicalData = await getHistoricalData(timeframe);
         console.log('Loaded historical data:', historicalData.length);
         historicalDataRef.current = historicalData;
-        candlestickSeries.setData(historicalData.map(d => ({
-          time: d.time,
+        candlestickSeriesRef.current?.setData(historicalData.map(d => ({
+          time: d.time as Time,
           open: d.open,
           high: d.high,
           low: d.low,
           close: d.close
         })));
 
+        // Run simulation on historical data if strategy is selected
+        if (strategy !== 'none') {
+          const selectedStrategy = getStrategy(strategy);
+          if (selectedStrategy) {
+            const signal = selectedStrategy.analyze(historicalData);
+            if (signal) {
+              console.log('Strategy Signal:', signal);
+            }
+          }
+        }
+
         // Update strategy indicators with initial data
-        updateStrategyIndicators(historicalData, chart);
+        if (chartRef.current) {
+          updateStrategyIndicators(historicalData, chartRef.current);
+        }
       } catch (error) {
         console.error('Error loading historical data:', error);
       }
@@ -358,7 +386,7 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
     loadData();
     chartRef.current = chart;
 
-    // Subscribe to real-time price updates with improved candle formation
+    // Subscribe to real-time price updates
     let currentCandle = {
       open: 0,
       high: -Infinity,
@@ -383,11 +411,10 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
     const unsubscribe = subscribeToPrice((data) => {
       if (candlestickSeriesRef.current) {
         const intervalSeconds = getIntervalSeconds(timeframe);
-        const currentTimestamp = Math.floor(Date.now() / 1000);
-        const candleTimestamp = Math.floor(currentTimestamp / intervalSeconds) * intervalSeconds;
+        const candleTimestamp = Math.floor(data.time / intervalSeconds) * intervalSeconds;
         
         // If this is a new candle
-        if (candleTimestamp !== currentCandle.time) {
+        if (candleTimestamp !== (currentCandle.time as UTCTimestamp)) {
           // If there was a previous candle, finalize it
           if (currentCandle.time !== 0) {
             const newCandle = {
@@ -400,124 +427,34 @@ export function CandlestickChart({ timeframe, strategy }: CandlestickChartProps)
             candlestickSeriesRef.current.update(newCandle);
             
             // Update historical data with the new candle
-            historicalDataRef.current = [...historicalDataRef.current.slice(1), newCandle];
+            historicalDataRef.current = [...historicalDataRef.current.slice(1), {
+              ...newCandle,
+              time: currentCandle.time as UTCTimestamp
+            }];
+
+            // Only update strategy indicators when we complete a candle
+            if (strategy !== 'none' && chartRef.current && indicatorSeriesRefs.current.size > 0) {
+              updateStrategyIndicators(historicalDataRef.current, chartRef.current);
+            }
           }
           
           // Start a new candle
           currentCandle = {
-            time: candleTimestamp,
+            time: Number(candleTimestamp) as UTCTimestamp,
             open: data.value,
             high: data.value,
             low: data.value,
             close: data.value,
           };
-
-          // Update candlestick series with the new candle
-          candlestickSeriesRef.current.update(currentCandle);
         } else {
           // Update existing candle
           if (data.value > currentCandle.high) currentCandle.high = data.value;
           if (data.value < currentCandle.low) currentCandle.low = data.value;
           currentCandle.close = data.value;
-
-          // Update candlestick series with the current state
-          candlestickSeriesRef.current.update(currentCandle);
         }
 
-        // Update strategy indicators if we have a strategy selected
-        if (strategy !== 'none' && chartRef.current && indicatorSeriesRefs.current.size > 0) {
-          const selectedStrategy = getStrategy(strategy);
-          if (selectedStrategy && selectedStrategy.id === 'ema_crossover') {
-            // Include the current candle in the calculations
-            const updatedData = [...historicalDataRef.current.slice(1), currentCandle];
-            const prices = updatedData.map(d => d.close);
-            const fastPeriod = 9;
-            const slowPeriod = 21;
-            const fastEMA = calculateEMA(prices, fastPeriod);
-            const slowEMA = calculateEMA(prices, slowPeriod);
-
-            // Update the line series with new data
-            indicatorSeriesRefs.current.forEach((series, name) => {
-              const emaData = (name === 'Fast EMA (9)' ? fastEMA : slowEMA).map((value, index) => ({
-                time: updatedData[index].time,
-                value: value
-              }));
-              series.setData(emaData);
-            });
-
-            // Check for new signal
-            const last = fastEMA.length - 1;
-            const prev = last - 1;
-            if (prev >= 0 && !isNaN(fastEMA[prev]) && !isNaN(slowEMA[prev]) && 
-                !isNaN(fastEMA[last]) && !isNaN(slowEMA[last])) {
-              
-              // Debug real-time crossover conditions
-              const crossingUp = fastEMA[prev] <= slowEMA[prev] && fastEMA[last] > slowEMA[last];
-              const crossingDown = fastEMA[prev] >= slowEMA[prev] && fastEMA[last] < slowEMA[last];
-              
-              if (crossingUp || crossingDown) {
-                console.log('Real-time EMA Status:', {
-                  time: new Date(currentCandle.time * 1000).toLocaleString(),
-                  price: currentCandle.close,
-                  prevFastEMA: fastEMA[prev].toFixed(2),
-                  prevSlowEMA: slowEMA[prev].toFixed(2),
-                  currFastEMA: fastEMA[last].toFixed(2),
-                  currSlowEMA: slowEMA[last].toFixed(2),
-                  signal: crossingUp ? 'BUY' : 'SELL'
-                });
-              }
-
-              let newMarker = null;
-              if (crossingUp) {
-                // Buy signal
-                newMarker = {
-                  time: currentCandle.time,
-                  position: 'belowBar',
-                  color: '#26a69a',
-                  shape: 'arrowUp',
-                  text: 'BUY',
-                  size: 2,
-                };
-                console.log('🟢 Real-time Buy Signal:', {
-                  price: currentCandle.close,
-                  time: new Date(currentCandle.time * 1000).toLocaleString(),
-                  fastEMA: fastEMA[last].toFixed(2),
-                  slowEMA: slowEMA[last].toFixed(2),
-                  diff: (fastEMA[last] - slowEMA[last]).toFixed(2)
-                });
-              } else if (crossingDown) {
-                // Sell signal
-                newMarker = {
-                  time: currentCandle.time,
-                  position: 'aboveBar',
-                  color: '#ef5350',
-                  shape: 'arrowDown',
-                  text: 'SELL',
-                  size: 2,
-                };
-                console.log('🔴 Real-time Sell Signal:', {
-                  price: currentCandle.close,
-                  time: new Date(currentCandle.time * 1000).toLocaleString(),
-                  fastEMA: fastEMA[last].toFixed(2),
-                  slowEMA: slowEMA[last].toFixed(2),
-                  diff: (fastEMA[last] - slowEMA[last]).toFixed(2)
-                });
-              }
-
-              // Add new marker if signal detected
-              if (newMarker && candlestickSeriesRef.current) {
-                const currentMarkers = candlestickSeriesRef.current.markers() || [];
-                const signalExists = currentMarkers.some(
-                  (m: any) => m.time === newMarker.time && m.text === newMarker.text
-                );
-                
-                if (!signalExists) {
-                  candlestickSeriesRef.current.setMarkers([...currentMarkers, newMarker]);
-                }
-              }
-            }
-          }
-        }
+        // Update candlestick series with the current state
+        candlestickSeriesRef.current.update(currentCandle);
       }
     }, timeframe);
 
