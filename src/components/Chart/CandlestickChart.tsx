@@ -27,70 +27,23 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<any>(null);
   const indicatorSeriesRefs = useRef<Map<string, any>>(new Map());
-  const historicalDataRef = useRef<any[]>([]);
   const markerSeriesRef = useRef<any>(null);
+  const historicalDataRef = useRef<any[]>([]);
+  const currentCandleRef = useRef<any>(null);
+  const lastSignalRef = useRef<{ time: number, type: 'buy' | 'sell' } | null>(null);
 
-  // Function to detect signals from EMA data
-  const detectEMASignals = (data: any[], fastEMA: number[], slowEMA: number[]): any[] => {
-    const markers: any[] = [];
-    for (let i = 1; i < Math.min(data.length, fastEMA.length, slowEMA.length); i++) {
-      const prevFast = fastEMA[i - 1];
-      const prevSlow = slowEMA[i - 1];
-      const currFast = fastEMA[i];
-      const currSlow = slowEMA[i];
-
-      // Debug crossover conditions
-      console.log('Checking crossover:', {
-        time: new Date(data[i].time * 1000).toLocaleString(),
-        prevFast: prevFast?.toFixed(2),
-        prevSlow: prevSlow?.toFixed(2),
-        currFast: currFast?.toFixed(2),
-        currSlow: currSlow?.toFixed(2),
-        isBuy: prevFast <= prevSlow && currFast > currSlow,
-        isSell: prevFast >= prevSlow && currFast < currSlow
-      });
-
-      // Only add signals if we have valid EMA values
-      if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
-        // Buy signal: Fast EMA crosses above Slow EMA
-        if (prevFast <= prevSlow && currFast > currSlow) {
-          markers.push({
-            time: data[i].time,
-            position: 'belowBar',
-            color: '#26a69a',
-            shape: 'arrowUp',
-            text: `BUY\n$${data[i].close.toFixed(2)}`,
-            size: 2,
-          });
-          console.log('🟢 Buy Signal Detected:', {
-            price: data[i].close,
-            time: new Date(data[i].time * 1000).toLocaleString(),
-            fastEMA: currFast.toFixed(2),
-            slowEMA: currSlow.toFixed(2),
-            diff: (currFast - currSlow).toFixed(2)
-          });
-        }
-        // Sell signal: Fast EMA crosses below Slow EMA
-        else if (prevFast >= prevSlow && currFast < currSlow) {
-          markers.push({
-            time: data[i].time,
-            position: 'aboveBar',
-            color: '#ef5350',
-            shape: 'arrowDown',
-            text: `SELL\n$${data[i].close.toFixed(2)}`,
-            size: 2,
-          });
-          console.log('🔴 Sell Signal Detected:', {
-            price: data[i].close,
-            time: new Date(data[i].time * 1000).toLocaleString(),
-            fastEMA: currFast.toFixed(2),
-            slowEMA: currSlow.toFixed(2),
-            diff: (currFast - currSlow).toFixed(2)
-          });
-        }
-      }
+  // Function to get interval in seconds
+  const getIntervalSeconds = (tf: Timeframe): number => {
+    switch (tf) {
+      case '1m': return 60;
+      case '5m': return 300;
+      case '15m': return 900;
+      case '30m': return 1800;
+      case '1h': return 3600;
+      case '4h': return 14400;
+      case '1d': return 86400;
+      default: return 60;
     }
-    return markers;
   };
 
   // Function to safely remove a series
@@ -104,237 +57,213 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
     }
   };
 
-  // Function to update strategy indicators
-  const updateStrategyIndicators = (data: any[], chart: IChartApi) => {
-    try {
-      if (!chart || !data.length) {
-        console.log('Chart or data not ready, skipping update');
-        return;
-      }
+  // Function to check for crossover signals
+  const checkForSignal = (
+    prevFast: number,
+    prevSlow: number,
+    currFast: number,
+    currSlow: number,
+    candle: any,
+    data: any[]
+  ) => {
+    if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
+      // Calculate average price and range for better positioning
+      const avgPrice = data.reduce((sum, d) => sum + d.close, 0) / data.length;
+      const priceRange = data.reduce((range, d) => Math.max(range, Math.abs(d.high - d.low)), 0);
+      const offset = priceRange * 0.75; // Use a percentage of the price range for consistent spacing
 
-      // Clear existing markers and indicators
+      // Buy signal: Fast crosses above Slow
+      if (prevFast <= prevSlow && currFast > currSlow) {
+        return {
+          time: candle.time,
+          position: 'belowBar',
+          color: '#26a69a',
+          shape: 'arrowUp',
+          text: `Buy ${candle.close.toFixed(2)}`,
+          size: 2,
+          value: Math.min(...data.slice(-10).map(d => d.low)) - offset, // Position below recent lows
+        };
+      }
+      // Sell signal: Fast crosses below Slow
+      else if (prevFast >= prevSlow && currFast < currSlow) {
+        return {
+          time: candle.time,
+          position: 'aboveBar',
+          color: '#ef5350',
+          shape: 'arrowDown',
+          text: `Sell ${candle.close.toFixed(2)}`,
+          size: 2,
+          value: Math.max(...data.slice(-10).map(d => d.high)) + offset, // Position above recent highs
+        };
+      }
+    }
+    return null;
+  };
+
+  // Function to add strategy indicators
+  const addStrategyIndicators = (chart: IChartApi, data: any[]) => {
+    console.log('Adding strategy indicators');
+    
+    // Clear any existing indicators
+    indicatorSeriesRefs.current.forEach(series => safelyRemoveSeries(chart, series));
+    indicatorSeriesRefs.current.clear();
+    
+    if (markerSeriesRef.current) {
       safelyRemoveSeries(chart, markerSeriesRef.current);
       markerSeriesRef.current = null;
+    }
 
-      indicatorSeriesRefs.current.forEach(series => {
-        safelyRemoveSeries(chart, series);
-      });
-      indicatorSeriesRefs.current.clear();
+    if (strategy === 'none') return;
 
-      if (strategy === 'none') {
-        console.log('No strategy selected, clearing indicators');
-        return;
+    const prices = data.map(d => d.close);
+    const fastPeriod = 9;
+    const slowPeriod = 21;
+
+    // Calculate MAs
+    const fastMA = strategy === 'ema_crossover' 
+      ? calculateEMA(prices, fastPeriod)
+      : calculateSMA(prices, fastPeriod);
+    const slowMA = strategy === 'ema_crossover'
+      ? calculateEMA(prices, slowPeriod)
+      : calculateSMA(prices, slowPeriod);
+
+    // Add MA lines
+    const fastSeries = chart.addLineSeries({
+      color: '#2962FF',
+      lineWidth: 2,
+      title: 'Fast MA',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+    });
+    const slowSeries = chart.addLineSeries({
+      color: '#FF6B6B',
+      lineWidth: 2,
+      title: 'Slow MA',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+    });
+
+    // Store refs
+    indicatorSeriesRefs.current.set('Fast MA', fastSeries);
+    indicatorSeriesRefs.current.set('Slow MA', slowSeries);
+
+    // Create marker series
+    markerSeriesRef.current = chart.addLineSeries({
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      lineVisible: false,
+      lineWidth: 1 as LineWidth,
+      color: 'rgba(0, 0, 0, 0)',
+    });
+
+    // Set MA data
+    const maData = data.map((candle, i) => ({
+      time: candle.time,
+      value: fastMA[i]
+    })).filter(d => !isNaN(d.value));
+    
+    const slowData = data.map((candle, i) => ({
+      time: candle.time,
+      value: slowMA[i]
+    })).filter(d => !isNaN(d.value));
+
+    fastSeries.setData(maData);
+    slowSeries.setData(slowData);
+
+    // Find and set signals
+    const signals = [];
+    for (let i = 1; i < data.length; i++) {
+      const signal = checkForSignal(
+        fastMA[i - 1],
+        slowMA[i - 1],
+        fastMA[i],
+        slowMA[i],
+        data[i],
+        data.slice(Math.max(0, i - 10), i + 1) // Pass last 10 candles for context
+      );
+      if (signal) {
+        signals.push(signal);
+        console.log(`${signal.text} signal at ${new Date(signal.time * 1000).toLocaleString()}`);
       }
+    }
 
-      const selectedStrategy = getStrategy(strategy);
-      if (!selectedStrategy?.indicators) {
-        console.log('No indicators found for strategy:', strategy);
-        return;
-      }
-
-      console.log('Setting up strategy:', selectedStrategy.id);
-
-      // Create marker series for signals
-      markerSeriesRef.current = chart.addCandlestickSeries({
-        upColor: 'rgba(0,0,0,0)',
-        downColor: 'rgba(0,0,0,0)',
-        borderVisible: false,
-        wickUpColor: 'rgba(0,0,0,0)',
-        wickDownColor: 'rgba(0,0,0,0)',
-      });
-
-      // Run strategy analysis and update indicators
-      const prices = data.map(d => d.close);
+    if (signals.length > 0) {
+      console.log(`Setting ${signals.length} historical signals`);
+      markerSeriesRef.current.setMarkers(signals);
       
-      if (selectedStrategy.id === 'ema_crossover' || selectedStrategy.id === 'sma_crossover') {
-        console.log(`Calculating ${selectedStrategy.id === 'ema_crossover' ? 'EMAs' : 'SMAs'} for crossover strategy`);
-        const fastPeriod = 9;
-        const slowPeriod = 21;
-        const fastLine = selectedStrategy.id === 'ema_crossover' 
-          ? calculateEMA(prices, fastPeriod)
-          : calculateSMA(prices, fastPeriod);
-        const slowLine = selectedStrategy.id === 'ema_crossover'
-          ? calculateEMA(prices, slowPeriod)
-          : calculateSMA(prices, slowPeriod);
-
-        // Add indicator lines
-        selectedStrategy.indicators.forEach((indicator, index) => {
-          console.log(`Adding indicator: ${indicator.name}`);
-          const colors = ['#2962FF', '#FF6B6B']; // Blue for fast, Red for slow
-          const lineSeries = chart.addLineSeries({
-            color: colors[index],
-            lineWidth: 2,
-            title: indicator.name,
-            priceFormat: {
-              type: 'price',
-              precision: 2,
-              minMove: 0.01,
-            },
-            lineStyle: 1, // Solid line
-          });
-          indicatorSeriesRefs.current.set(indicator.name, lineSeries);
-
-          // Update indicator data with proper types
-          const lineData = (index === 0 ? fastLine : slowLine).map((value: number, idx: number) => ({
-            time: data[idx].time,
-            value: value
-          }));
-          lineSeries.setData(lineData);
-        });
-
-        // Get historical signals
-        const markers = [];
-        for (let i = 1; i < data.length; i++) {
-          const prevFast = fastLine[i - 1];
-          const prevSlow = slowLine[i - 1];
-          const currFast = fastLine[i];
-          const currSlow = slowLine[i];
-
-          if (!isNaN(prevFast) && !isNaN(prevSlow) && !isNaN(currFast) && !isNaN(currSlow)) {
-            if (prevFast <= prevSlow && currFast > currSlow) {
-              // Buy signal
-              markers.push({
-                time: data[i].time,
-                position: 'belowBar',
-                color: '#26a69a',
-                shape: 'arrowUp',
-                text: 'BUY',
-                size: 2,
-              });
-              console.log('Buy Signal at:', {
-                time: new Date(data[i].time * 1000).toLocaleString(),
-                price: data[i].close,
-                fastLine: currFast.toFixed(2),
-                slowLine: currSlow.toFixed(2)
-              });
-            } else if (prevFast >= prevSlow && currFast < currSlow) {
-              // Sell signal
-              markers.push({
-                time: data[i].time,
-                position: 'aboveBar',
-                color: '#ef5350',
-                shape: 'arrowDown',
-                text: 'SELL',
-                size: 2,
-              });
-              console.log('Sell Signal at:', {
-                time: new Date(data[i].time * 1000).toLocaleString(),
-                price: data[i].close,
-                fastLine: currFast.toFixed(2),
-                slowLine: currSlow.toFixed(2)
-              });
-            }
-          }
-        }
-
-        if (markers.length > 0) {
-          console.log('Setting markers:', markers);
-          markerSeriesRef.current.setMarkers(markers);
-        }
-      }
-    } catch (e) {
-      console.error('Error in updateStrategyIndicators:', e);
+      // Set a data point for each signal to ensure proper positioning
+      markerSeriesRef.current.setData(signals.map(signal => ({
+        time: signal.time,
+        value: signal.value
+      })));
     }
   };
 
-  // Update the strategy change effect
-  useEffect(() => {
-    console.log('Strategy changed:', strategy);
-    
-    if (chartRef.current) {
-      // Clear existing indicators and markers
-      safelyRemoveSeries(chartRef.current, markerSeriesRef.current);
-      markerSeriesRef.current = null;
+  // Modify the real-time signal check
+  const checkRealTimeSignal = (data: any[]) => {
+    if (!markerSeriesRef.current || data.length < 2) return;
 
-      indicatorSeriesRefs.current.forEach(series => {
-        safelyRemoveSeries(chartRef.current!, series);
-      });
-      indicatorSeriesRefs.current.clear();
+    const prices = data.map(d => d.close);
+    const fastPeriod = 9;
+    const slowPeriod = 21;
 
-      // Reinitialize strategy indicators
-      if (historicalDataRef.current.length > 0) {
-        console.log('Reinitializing strategy indicators with data length:', historicalDataRef.current.length);
-        updateStrategyIndicators(historicalDataRef.current, chartRef.current);
-      }
+    const fastMA = strategy === 'ema_crossover' 
+      ? calculateEMA(prices, fastPeriod)
+      : calculateSMA(prices, fastPeriod);
+    const slowMA = strategy === 'ema_crossover'
+      ? calculateEMA(prices, slowPeriod)
+      : calculateSMA(prices, slowPeriod);
+
+    const signal = checkForSignal(
+      fastMA[fastMA.length - 2],
+      slowMA[slowMA.length - 2],
+      fastMA[fastMA.length - 1],
+      slowMA[slowMA.length - 1],
+      data[data.length - 1],
+      data.slice(-10) // Pass last 10 candles for context
+    );
+
+    if (signal) {
+      const existingMarkers = markerSeriesRef.current.markers() || [];
+      console.log(`Adding real-time ${signal.text} signal`);
+      markerSeriesRef.current.setMarkers([...existingMarkers, signal]);
     }
-  }, [strategy]); // Only run when strategy changes
+  };
 
+  // Effect for strategy changes
+  useEffect(() => {
+    if (chartRef.current && historicalDataRef.current.length > 0) {
+      addStrategyIndicators(chartRef.current, historicalDataRef.current);
+    }
+  }, [strategy]);
+
+  // Main chart initialization effect
   useEffect(() => {
     if (!chartContainerRef.current) return;
-    console.log('Initializing chart with timeframe:', timeframe);
 
-    const formatTime = (time: Time) => {
-      let date: Date;
-      
-      if (typeof time === 'number') {
-        date = new Date(time * 1000);
-      } else if (typeof time === 'string') {
-        date = new Date(time);
-      } else {
-        // Handle BusinessDay format
-        const { year, month, day } = time as BusinessDay;
-        date = new Date(year, month - 1, day);
-      }
-
-      const formatOptions: Intl.DateTimeFormatOptions = {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      };
-
-      // For daily timeframes, don't show time
-      if (timeframe === '1d') {
-        delete formatOptions.hour;
-        delete formatOptions.minute;
-      }
-
-      return date.toLocaleString('en-US', formatOptions);
-    };
-
-    const chartOptions: DeepPartial<ChartOptions> = {
+    const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { color: '#1E222D' },
         textColor: '#DDD',
-        fontSize: 12,
-        fontFamily: 'Roboto, sans-serif',
       },
       grid: {
         vertLines: { color: '#2B2B43' },
         horzLines: { color: '#2B2B43' },
       },
-      crosshair: {
-        mode: 1,
-        vertLine: {
-          width: 1 as LineWidth,
-          color: '#758696',
-          style: 3,
-        },
-        horzLine: {
-          width: 1 as LineWidth,
-          color: '#758696',
-          style: 3,
-        },
-      },
       timeScale: {
         borderColor: '#2B2B43',
         timeVisible: true,
-        secondsVisible: false,
       },
       rightPriceScale: {
         borderColor: '#2B2B43',
       },
-      localization: {
-        timeFormatter: formatTime,
-      },
-      watermark: {
-        visible: false,
-      },
-    };
-
-    const chart = createChart(chartContainerRef.current, {
-      ...chartOptions,
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
     });
@@ -348,117 +277,9 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
     });
 
     candlestickSeriesRef.current = candlestickSeries;
-
-    // Fetch historical data
-    const loadData = async () => {
-      try {
-        const historicalData = await getHistoricalData(timeframe);
-        console.log('Loaded historical data:', historicalData.length);
-        historicalDataRef.current = historicalData;
-        candlestickSeriesRef.current?.setData(historicalData.map(d => ({
-          time: d.time as Time,
-          open: d.open,
-          high: d.high,
-          low: d.low,
-          close: d.close
-        })));
-
-        // Run simulation on historical data if strategy is selected
-        if (strategy !== 'none') {
-          const selectedStrategy = getStrategy(strategy);
-          if (selectedStrategy) {
-            const signal = selectedStrategy.analyze(historicalData);
-            if (signal) {
-              console.log('Strategy Signal:', signal);
-            }
-          }
-        }
-
-        // Update strategy indicators with initial data
-        if (chartRef.current) {
-          updateStrategyIndicators(historicalData, chartRef.current);
-        }
-      } catch (error) {
-        console.error('Error loading historical data:', error);
-      }
-    };
-
-    loadData();
     chartRef.current = chart;
 
-    // Subscribe to real-time price updates
-    let currentCandle = {
-      open: 0,
-      high: -Infinity,
-      low: Infinity,
-      close: 0,
-      time: 0,
-    };
-
-    const getIntervalSeconds = (tf: Timeframe): number => {
-      switch (tf) {
-        case '1m': return 60;
-        case '5m': return 300;
-        case '15m': return 900;
-        case '30m': return 1800;
-        case '1h': return 3600;
-        case '4h': return 14400;
-        case '1d': return 86400;
-        default: return 60;
-      }
-    };
-
-    const unsubscribe = subscribeToPrice((data) => {
-      if (candlestickSeriesRef.current) {
-        const intervalSeconds = getIntervalSeconds(timeframe);
-        const candleTimestamp = Math.floor(data.time / intervalSeconds) * intervalSeconds;
-        
-        // If this is a new candle
-        if (candleTimestamp !== (currentCandle.time as UTCTimestamp)) {
-          // If there was a previous candle, finalize it
-          if (currentCandle.time !== 0) {
-            const newCandle = {
-              time: currentCandle.time,
-              open: currentCandle.open,
-              high: currentCandle.high,
-              low: currentCandle.low,
-              close: currentCandle.close,
-            };
-            candlestickSeriesRef.current.update(newCandle);
-            
-            // Update historical data with the new candle
-            historicalDataRef.current = [...historicalDataRef.current.slice(1), {
-              ...newCandle,
-              time: currentCandle.time as UTCTimestamp
-            }];
-
-            // Only update strategy indicators when we complete a candle
-            if (strategy !== 'none' && chartRef.current && indicatorSeriesRefs.current.size > 0) {
-              updateStrategyIndicators(historicalDataRef.current, chartRef.current);
-            }
-          }
-          
-          // Start a new candle
-          currentCandle = {
-            time: Number(candleTimestamp) as UTCTimestamp,
-            open: data.value,
-            high: data.value,
-            low: data.value,
-            close: data.value,
-          };
-        } else {
-          // Update existing candle
-          if (data.value > currentCandle.high) currentCandle.high = data.value;
-          if (data.value < currentCandle.low) currentCandle.low = data.value;
-          currentCandle.close = data.value;
-        }
-
-        // Update candlestick series with the current state
-        candlestickSeriesRef.current.update(currentCandle);
-      }
-    }, timeframe);
-
-    // Remove TradingView logo elements if they exist
+    // Remove TradingView logo elements
     const removeTradingViewLogo = () => {
       const logoElement = document.getElementById('tv-attr-logo');
       if (logoElement) {
@@ -471,11 +292,85 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
       }
     };
 
-    // Run logo removal after chart is created
+    // Run logo removal after chart is created and after a delay
     removeTradingViewLogo();
-    // Also run after a short delay to catch dynamically added elements
     const logoTimeoutId = setTimeout(removeTradingViewLogo, 100);
 
+    // Load initial data
+    const loadData = async () => {
+      try {
+        const data = await getHistoricalData(timeframe);
+        historicalDataRef.current = data;
+        
+        candlestickSeries.setData(data);
+
+        if (strategy !== 'none') {
+          addStrategyIndicators(chart, data);
+        }
+
+        // Initialize current candle from last historical candle
+        if (data.length > 0) {
+          const lastCandle = data[data.length - 1];
+          currentCandleRef.current = {
+            time: lastCandle.time,
+            open: lastCandle.close,
+            high: lastCandle.close,
+            low: lastCandle.close,
+            close: lastCandle.close
+          };
+        }
+      } catch (error) {
+        console.error('Error loading data:', error);
+      }
+    };
+
+    loadData();
+
+    // Real-time updates
+    const unsubscribe = subscribeToPrice((data) => {
+      if (!candlestickSeriesRef.current) return;
+
+      const intervalSeconds = getIntervalSeconds(timeframe);
+      const candleTimestamp = Math.floor(data.time / intervalSeconds) * intervalSeconds;
+
+      // If this is a new candle
+      if (!currentCandleRef.current || candleTimestamp !== currentCandleRef.current.time) {
+        // If we had a previous candle, add it to historical data and check for signals
+        if (currentCandleRef.current) {
+          historicalDataRef.current = [...historicalDataRef.current, currentCandleRef.current];
+          
+          // Update strategies with the new historical data
+          if (strategy !== 'none' && chartRef.current) {
+            addStrategyIndicators(chartRef.current, historicalDataRef.current);
+          }
+        }
+
+        // Start new candle
+        currentCandleRef.current = {
+          time: candleTimestamp,
+          open: data.value,
+          high: data.value,
+          low: data.value,
+          close: data.value
+        };
+      } else {
+        // Update current candle
+        currentCandleRef.current.high = Math.max(currentCandleRef.current.high, data.value);
+        currentCandleRef.current.low = Math.min(currentCandleRef.current.low, data.value);
+        currentCandleRef.current.close = data.value;
+
+        // Check for real-time signals with current candle
+        if (strategy !== 'none' && chartRef.current && historicalDataRef.current.length > 0) {
+          const updatedData = [...historicalDataRef.current, currentCandleRef.current];
+          checkRealTimeSignal(updatedData);
+        }
+      }
+
+      // Update the chart with current candle
+      candlestickSeriesRef.current.update(currentCandleRef.current);
+    }, timeframe);
+
+    // Handle window resize
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
         chartRef.current.applyOptions({
@@ -491,11 +386,9 @@ export function CandlestickChart({ timeframe, strategy, token, exchange }: Candl
       window.removeEventListener('resize', handleResize);
       clearTimeout(logoTimeoutId);
       unsubscribe();
-      if (chartRef.current) {
-        chartRef.current.remove();
-      }
+      chart.remove();
     };
-  }, [timeframe, strategy]);
+  }, [timeframe]);
 
   return <div ref={chartContainerRef} className="w-full h-full" />;
 } 
