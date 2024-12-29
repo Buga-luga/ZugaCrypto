@@ -12,6 +12,14 @@ import {
   calculateMACD
 } from '@/services/strategies/moving-averages';
 import { TickerHeader } from './TickerHeader';
+import { 
+  getChartPriceFormat, 
+  getScaleFormat, 
+  formatPrice, 
+  isBTCPair,
+  DEFAULT_BTC_FORMAT,
+  DEFAULT_USDT_FORMAT
+} from '@/utils/priceFormat';
 
 interface CandlestickChartProps {
   timeframe: Timeframe;
@@ -38,14 +46,21 @@ export function CandlestickChart({
   exchange = 'CryptoCompare',
   onPairChange = () => {} 
 }: CandlestickChartProps) {
+  // Function to get default price format based on base token
+  const getDefaultPrice = (baseToken: string) => {
+    return isBTCPair(baseToken) ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
+  };
+
   const [selectedExchange, setSelectedExchange] = useState(exchange);
-  const [selectedBaseToken, setSelectedBaseToken] = useState(baseToken);
-  const [currentPrice, setCurrentPrice] = useState<string>('Loading...');
-  const [priceStats, setPriceStats] = useState({
-    change24h: '—',
-    high24h: '—',
-    low24h: '—'
-  });
+  const [currentBaseToken, setCurrentBaseToken] = useState(baseToken);
+  const [currentPrice, setCurrentPrice] = useState<string>(() => getDefaultPrice(baseToken));
+  const [priceStats, setPriceStats] = useState(() => ({
+    change1h: getDefaultPrice(baseToken),
+    change24h: getDefaultPrice(baseToken),
+    change7d: getDefaultPrice(baseToken),
+    high24h: getDefaultPrice(baseToken),
+    low24h: getDefaultPrice(baseToken)
+  }));
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<any>(null);
@@ -82,20 +97,20 @@ export function CandlestickChart({
 
   // Function to get appropriate decimal places based on base token
   const getDecimalPlaces = (baseToken: string): number => {
-    return baseToken === 'BTC' ? 8 : 2;
+    return isBTCPair(baseToken) ? 8 : 2;
   };
 
   // Function to get appropriate min move based on base token
   const getMinMove = (baseToken: string): number => {
-    return baseToken.toUpperCase() === 'BTC' ? 0.00000001 : 0.01;
+    return isBTCPair(baseToken) ? 0.00000001 : 0.01;
   };
 
   // Function to format price based on base token
   const formatPrice = (price: number, baseToken: string): string => {
-    if (baseToken === 'BTC') {
-      return price.toFixed(8);  // Show 8 decimal places for BTC pairs
+    if (typeof price !== 'number' || isNaN(price)) {
+      return isBTCPair(baseToken) ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
     }
-    return price.toFixed(2);    // Show 2 decimal places for other pairs
+    return price.toFixed(isBTCPair(baseToken) ? 8 : 2);
   };
 
   // Function to format signal text
@@ -521,37 +536,64 @@ export function CandlestickChart({
     }
   };
 
+  // Price format configuration
+  const getPriceFormat = useCallback((baseToken: string) => {
+    const btcPair = isBTCPair(baseToken);
+    return {
+      type: 'price' as const,
+      precision: btcPair ? 8 : 2,
+      minMove: btcPair ? 0.00000001 : 0.01,
+      format: (price: number) => {
+        if (typeof price !== 'number' || isNaN(price)) {
+          return btcPair ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
+        }
+        return price.toFixed(btcPair ? 8 : 2);
+      }
+    };
+  }, []);
+
   // Function to update price stats
   const updatePriceStats = useCallback((data: any[]) => {
     if (data.length < 2) return;
 
-    const last24h = data.slice(-24); // Assuming hourly data
-    const currentPrice = last24h[last24h.length - 1].close;
-    const openPrice = last24h[0].open;
+    const currentPrice = data[data.length - 1].close;
+    
+    // Calculate different time period changes
+    const last1h = data.slice(-1); // Last hour
+    const last24h = data.slice(-24); // Last 24 hours
+    const last7d = data.slice(-168); // Last 7 days (24 * 7)
+    
     const high24h = Math.max(...last24h.map(d => d.high));
     const low24h = Math.min(...last24h.map(d => d.low));
     
-    const priceChange = ((currentPrice - openPrice) / openPrice) * 100;
-    const changeColor = priceChange >= 0 ? 'text-[#26a69a]' : 'text-[#ef5350]';
+    // Calculate percentage changes
+    const getPercentChange = (periodData: any[]) => {
+      if (periodData.length < 2) return 0;
+      const oldPrice = periodData[0].close;
+      return ((currentPrice - oldPrice) / oldPrice) * 100;
+    };
 
-    setCurrentPrice(formatPrice(currentPrice, baseToken));
+    const change1h = getPercentChange(last1h);
+    const change24h = getPercentChange(last24h);
+    const change7d = getPercentChange(last7d);
+    
+    // Format prices using the price format utility
+    const formatPriceWithCurrentBase = (price: number) => formatPrice(price, currentBaseToken);
+
+    // Update state with formatted values
+    const formattedCurrentPrice = formatPriceWithCurrentBase(currentPrice);
+    const formattedHigh = formatPriceWithCurrentBase(high24h);
+    const formattedLow = formatPriceWithCurrentBase(low24h);
+
+    setCurrentPrice(formattedCurrentPrice);
     setPriceStats({
-      change24h: `<span class="${changeColor}">${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%</span>`,
-      high24h: formatPrice(high24h, baseToken),
-      low24h: formatPrice(low24h, baseToken)
+      change1h: change1h.toFixed(2),
+      change24h: change24h.toFixed(2),
+      change7d: change7d.toFixed(2),
+      high24h: formattedHigh,
+      low24h: formattedLow
     });
-
-    // Update DOM elements with correct decimal places
-    const priceElement = document.getElementById('current-price');
-    const changeElement = document.getElementById('price-change');
-    const highElement = document.getElementById('24h-high');
-    const lowElement = document.getElementById('24h-low');
-
-    if (priceElement) priceElement.textContent = formatPrice(currentPrice, baseToken);
-    if (changeElement) changeElement.innerHTML = `<span class="${changeColor}">${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%</span>`;
-    if (highElement) highElement.textContent = formatPrice(high24h, baseToken);
-    if (lowElement) lowElement.textContent = formatPrice(low24h, baseToken);
-  }, [baseToken]);
+  }, [currentBaseToken]);
 
   // Effect for strategy changes
   useEffect(() => {
@@ -559,6 +601,22 @@ export function CandlestickChart({
       addStrategyIndicators(chartRef.current, historicalDataRef.current);
     }
   }, [strategy]);
+
+  // Create series with price format
+  const createSeriesWithFormat = useCallback((
+    chart: IChartApi,
+    options: any,
+    priceFormat: any
+  ) => {
+    return chart.addCandlestickSeries({
+      ...options,
+      priceFormat: {
+        type: priceFormat.type,
+        precision: priceFormat.precision,
+        minMove: priceFormat.minMove,
+      },
+    });
+  }, []);
 
   // Main chart initialization effect
   useEffect(() => {
@@ -584,144 +642,50 @@ export function CandlestickChart({
           top: 0.1,
           bottom: 0.4,
         },
+        autoScale: true,
+        mode: 0,
+        alignLabels: true,
+        borderVisible: true,
+        entireTextOnly: true,
+        ticksVisible: true,
       },
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
+      localization: {
+        priceFormatter: (price: number) => formatPrice(price, currentBaseToken),
+      },
     };
 
     const chart = createChart(chartContainerRef.current, chartOptions);
+
+    // Create candlestick series with price format
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#26a69a',
       downColor: '#ef5350',
       borderVisible: false,
       wickUpColor: '#26a69a',
       wickDownColor: '#ef5350',
-      priceScaleId: 'right',
       priceFormat: {
         type: 'price',
-        precision: baseToken === 'BTC' ? 8 : 2,
-        minMove: baseToken === 'BTC' ? 0.00000001 : 0.01,
+        precision: getDecimalPlaces(currentBaseToken),
+        minMove: getMinMove(currentBaseToken),
       },
     });
-
-    // Update price scale format
-    const priceScale = chart.priceScale('right');
-    if (priceScale) {
-      priceScale.applyOptions({
-        autoScale: true,
-        mode: 1,
-        invertScale: false,
-        scaleMargins: {
-          top: 0.1,
-          bottom: 0.4,
-        },
-      });
-    }
-
-    // Force update the series price format to ensure it takes effect
-    candlestickSeries.applyOptions({
-      priceFormat: {
-        type: 'price',
-        precision: baseToken === 'BTC' ? 8 : 2,
-        minMove: baseToken === 'BTC' ? 0.00000001 : 0.01,
-      },
-    });
-
-    // Add MACD series with proper price formatting
-    if (strategy === 'macd_crossover') {
-      const macdSeries = chart.addLineSeries({
-        color: '#2962FF',
-        lineWidth: 2,
-        title: 'MACD',
-        priceFormat: {
-          type: 'price',
-          precision: getDecimalPlaces(baseToken),
-          minMove: getMinMove(baseToken),
-        },
-        priceScaleId: 'overlay',
-      });
-
-      const signalSeries = chart.addLineSeries({
-        color: '#FF6B6B',
-        lineWidth: 2,
-        title: 'Signal',
-        priceFormat: {
-          type: 'price',
-          precision: getDecimalPlaces(baseToken),
-          minMove: getMinMove(baseToken),
-        },
-        priceScaleId: 'overlay',
-      });
-
-      const histogramSeries = chart.addHistogramSeries({
-        color: '#26a69a',
-        title: 'Histogram',
-        priceFormat: {
-          type: 'price',
-          precision: getDecimalPlaces(baseToken),
-          minMove: getMinMove(baseToken),
-        },
-        priceScaleId: 'overlay',
-        base: 0,
-      });
-
-      indicatorSeriesRefs.current.set('MACD', macdSeries);
-      indicatorSeriesRefs.current.set('Signal', signalSeries);
-      indicatorSeriesRefs.current.set('Histogram', histogramSeries);
-    }
 
     candlestickSeriesRef.current = candlestickSeries;
     chartRef.current = chart;
 
-    // Remove TradingView logo elements
-    const removeTradingViewLogo = () => {
-      const logoElement = document.getElementById('tv-attr-logo');
-      if (logoElement) {
-        logoElement.remove();
-      }
-
-      const headerLogo = document.querySelector('.tv-header__link');
-      if (headerLogo) {
-        headerLogo.remove();
-      }
-    };
-
-    // Run logo removal after chart is created and after a delay
-    removeTradingViewLogo();
-    const logoTimeoutId = setTimeout(removeTradingViewLogo, 100);
-
     // Load initial data
     const loadData = async () => {
       try {
-        const data = await getHistoricalData(timeframe, token, baseToken);
+        const data = await getHistoricalData(timeframe, token, currentBaseToken);
         historicalDataRef.current = data;
-        
-        // Update price format before setting data
-        candlestickSeries.applyOptions({
-          priceFormat: {
-            type: 'price',
-            precision: baseToken === 'BTC' ? 8 : 2,
-            minMove: baseToken === 'BTC' ? 0.00000001 : 0.01,
-          },
-        });
         
         candlestickSeries.setData(data);
         updatePriceStats(data);
 
         if (strategy !== 'none') {
           addStrategyIndicators(chart, data);
-        }
-
-        // Initialize current candle from last historical candle
-        if (data.length > 0) {
-          const lastCandle = data[data.length - 1];
-          currentCandleRef.current = {
-            time: lastCandle.time,
-            open: lastCandle.close,
-            high: lastCandle.close,
-            low: lastCandle.close,
-            close: lastCandle.close
-          };
         }
       } catch (error) {
         console.error('Error loading data:', error);
@@ -762,12 +726,6 @@ export function CandlestickChart({
         currentCandleRef.current.high = Math.max(currentCandleRef.current.high, data.value);
         currentCandleRef.current.low = Math.min(currentCandleRef.current.low, data.value);
         currentCandleRef.current.close = data.value;
-
-        // Check for real-time signals with current candle
-        if (strategy !== 'none' && chartRef.current && historicalDataRef.current.length > 0) {
-          const updatedData = [...historicalDataRef.current, currentCandleRef.current];
-          checkRealTimeSignal(updatedData);
-        }
       }
 
       // Update the chart with current candle
@@ -777,7 +735,7 @@ export function CandlestickChart({
       if (historicalDataRef.current.length > 0) {
         updatePriceStats([...historicalDataRef.current, currentCandleRef.current]);
       }
-    }, timeframe, token, baseToken);
+    }, timeframe, token, currentBaseToken);
 
     // Handle window resize
     const handleResize = () => {
@@ -791,59 +749,96 @@ export function CandlestickChart({
 
     window.addEventListener('resize', handleResize);
 
+    // Remove TradingView logo elements
+    const removeTradingViewLogo = () => {
+      const logoElement = document.getElementById('tv-attr-logo');
+      if (logoElement) {
+        logoElement.remove();
+      }
+
+      const headerLogo = document.querySelector('.tv-header__link');
+      if (headerLogo) {
+        headerLogo.remove();
+      }
+    };
+
+    // Run logo removal after chart is created and after a delay
+    removeTradingViewLogo();
+    const logoTimeoutId = setTimeout(removeTradingViewLogo, 100);
+
+    // Function to create indicator series with correct price format
+    const createIndicatorSeries = (
+      type: 'line' | 'histogram',
+      options: any
+    ) => {
+      const priceConfig = getPriceFormat(baseToken);
+      const seriesOptions = {
+        ...options,
+        priceFormat: {
+          type: 'price',
+          precision: priceConfig.precision,
+          minMove: priceConfig.minMove,
+        },
+      };
+
+      return type === 'line' 
+        ? chart.addLineSeries(seriesOptions)
+        : chart.addHistogramSeries(seriesOptions);
+    };
+
+    // Add MACD series with proper price formatting
+    if (strategy === 'macd_crossover') {
+      const macdSeries = createIndicatorSeries('line', {
+        color: '#2962FF',
+        lineWidth: 2,
+        title: 'MACD',
+        priceScaleId: 'overlay',
+      });
+
+      const signalSeries = createIndicatorSeries('line', {
+        color: '#FF6B6B',
+        lineWidth: 2,
+        title: 'Signal',
+        priceScaleId: 'overlay',
+      });
+
+      const histogramSeries = createIndicatorSeries('histogram', {
+        color: '#26a69a',
+        title: 'Histogram',
+        priceScaleId: 'overlay',
+        base: 0,
+      });
+
+      indicatorSeriesRefs.current.set('MACD', macdSeries);
+      indicatorSeriesRefs.current.set('Signal', signalSeries);
+      indicatorSeriesRefs.current.set('Histogram', histogramSeries);
+    }
+
     return () => {
       window.removeEventListener('resize', handleResize);
       clearTimeout(logoTimeoutId);
       unsubscribe();
       chart.remove();
     };
-  }, [timeframe]);
+  }, [timeframe, currentBaseToken]);
 
   // Handle trading pair change
   const handlePairChange = useCallback((newToken: string, newBaseToken: string) => {
-    onPairChange(newToken, newBaseToken); // Notify parent component
-    // Reload data for new trading pair
-    if (chartRef.current && candlestickSeriesRef.current) {
-      const loadNewData = async () => {
-        try {
-          // Update price format for new pair
-          candlestickSeriesRef.current.applyOptions({
-            priceFormat: {
-              type: 'price',
-              precision: newBaseToken === 'BTC' ? 8 : 2,
-              minMove: newBaseToken === 'BTC' ? 0.00000001 : 0.01,
-            },
-          });
-
-          const data = await getHistoricalData(timeframe, newToken, newBaseToken);
-          historicalDataRef.current = data;
-          
-          candlestickSeriesRef.current.setData(data);
-          updatePriceStats(data);
-
-          if (strategy !== 'none') {
-            addStrategyIndicators(chartRef.current!, data);
-          }
-
-          // Initialize current candle from last historical candle
-          if (data.length > 0) {
-            const lastCandle = data[data.length - 1];
-            currentCandleRef.current = {
-              time: lastCandle.time,
-              open: lastCandle.close,
-              high: lastCandle.close,
-              low: lastCandle.close,
-              close: lastCandle.close
-            };
-          }
-        } catch (error) {
-          console.error('Error loading data:', error);
-        }
-      };
-
-      loadNewData();
-    }
-  }, [timeframe, strategy, updatePriceStats, onPairChange]);
+    onPairChange(newToken, newBaseToken);
+    setCurrentBaseToken(newBaseToken);
+    
+    // Reset price states with correct format for the new base token
+    const defaultPrice = isBTCPair(newBaseToken) ? DEFAULT_BTC_FORMAT : DEFAULT_USDT_FORMAT;
+    
+    setCurrentPrice(defaultPrice);
+    setPriceStats({
+      change1h: '0.00',
+      change24h: '0.00',
+      change7d: '0.00',
+      high24h: defaultPrice,
+      low24h: defaultPrice
+    });
+  }, [onPairChange]);
 
   return (
     <div className="flex flex-col w-full h-full">
@@ -851,6 +846,8 @@ export function CandlestickChart({
         token={token}
         baseToken={baseToken}
         exchange={exchange}
+        currentPrice={currentPrice}
+        priceStats={priceStats}
         onExchangeChange={setSelectedExchange}
         onPairChange={handlePairChange}
       />

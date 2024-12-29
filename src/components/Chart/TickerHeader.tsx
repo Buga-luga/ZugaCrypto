@@ -1,4 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { formatPrice } from '@/utils/priceFormat';
+import { isBTCPair, DEFAULT_BTC_FORMAT, DEFAULT_USDT_FORMAT } from '@/utils/priceFormat';
 
 const ChevronDownIcon = () => (
   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -55,10 +57,25 @@ function filterPairs(pairs: typeof tradingPairs, searchTerm: string) {
   );
 }
 
+interface PriceFormat {
+  type: 'price';
+  precision: number;
+  minMove: number;
+  format: (price: number) => string;
+}
+
 interface TickerHeaderProps {
   token?: string;
   baseToken?: string;
   exchange?: string;
+  currentPrice?: string;
+  priceStats?: {
+    high24h: string;
+    low24h: string;
+    change1h: string;
+    change24h: string;
+    change7d: string;
+  };
   onExchangeChange?: (exchange: string) => void;
   onPairChange: (token: string, baseToken: string) => void;
 }
@@ -67,6 +84,8 @@ export function TickerHeader({
   token = 'BTC', 
   baseToken = 'USDT', 
   exchange = 'CryptoCompare',
+  currentPrice,
+  priceStats,
   onExchangeChange = () => {}, 
   onPairChange 
 }: TickerHeaderProps) {
@@ -76,45 +95,19 @@ export function TickerHeader({
   
   const filteredPairs = filterPairs(tradingPairs, searchTerm);
 
-  // Function to get appropriate decimal places based on base token
-  const getDecimalPlaces = (baseToken: string): number => {
-    if (baseToken.toUpperCase() === 'BTC') return 8;
-    return 2;
+  // Simply use the provided values, don't try to format them
+  const displayPrice = currentPrice || '0.00';
+  const displayStats = priceStats || {
+    high24h: '0.00',
+    low24h: '0.00',
+    change1h: '0.00',
+    change24h: '0.00',
+    change7d: '0.00'
   };
 
-  // Function to format price based on base token
-  const formatPrice = (price: string | number, baseToken: string): string => {
-    const numPrice = typeof price === 'string' ? parseFloat(price) : price;
-    if (baseToken === 'BTC') {
-      return numPrice.toFixed(8);  // Show 8 decimal places for BTC pairs (e.g., ADA/BTC)
-    }
-    return numPrice.toFixed(2);    // Show 2 decimal places for other pairs (e.g., ADA/USDT)
+  const getChangeColor = (value: string) => {
+    return value.startsWith('-') ? 'text-red-500' : 'text-green-500';
   };
-
-  // Function to update price stats
-  const updatePriceStats = useCallback((data: any[]) => {
-    if (data.length < 2) return;
-
-    const last24h = data.slice(-24); // Assuming hourly data
-    const currentPrice = last24h[last24h.length - 1].close;
-    const openPrice = last24h[0].open;
-    const high24h = Math.max(...last24h.map(d => d.high));
-    const low24h = Math.min(...last24h.map(d => d.low));
-    
-    const priceChange = ((currentPrice - openPrice) / openPrice) * 100;
-    const changeColor = priceChange >= 0 ? 'text-[#26a69a]' : 'text-[#ef5350]';
-
-    // Update DOM elements with correct decimal places
-    const priceElement = document.getElementById('current-price');
-    const changeElement = document.getElementById('price-change');
-    const highElement = document.getElementById('24h-high');
-    const lowElement = document.getElementById('24h-low');
-
-    if (priceElement) priceElement.textContent = formatPrice(currentPrice, baseToken);
-    if (changeElement) changeElement.innerHTML = `<span class="${changeColor}">${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%</span>`;
-    if (highElement) highElement.textContent = formatPrice(high24h, baseToken);
-    if (lowElement) lowElement.textContent = formatPrice(low24h, baseToken);
-  }, [baseToken]);
 
   return (
     <div className="flex items-center justify-between px-4 py-2 bg-[#1E222D] text-white border-b border-[#2B2B43]">
@@ -182,20 +175,35 @@ export function TickerHeader({
       </div>
       <div className="flex items-center space-x-6">
         <div>
-          <span id="current-price" className="text-lg font-semibold">Loading...</span>
+          <span className="text-gray-400 text-sm">Price</span>
+          <div className="text-lg font-semibold">{displayPrice}</div>
         </div>
         <div className="flex items-center space-x-4 text-sm">
           <div>
-            <span className="text-gray-400">24h Change</span>
-            <div id="price-change">—</div>
+            <span className="text-gray-400">1h</span>
+            <div className={getChangeColor(displayStats.change1h)}>
+              {displayStats.change1h}%
+            </div>
+          </div>
+          <div>
+            <span className="text-gray-400">24h</span>
+            <div className={getChangeColor(displayStats.change24h)}>
+              {displayStats.change24h}%
+            </div>
+          </div>
+          <div>
+            <span className="text-gray-400">7D</span>
+            <div className={getChangeColor(displayStats.change7d)}>
+              {displayStats.change7d}%
+            </div>
           </div>
           <div>
             <span className="text-gray-400">24h High</span>
-            <div id="24h-high">—</div>
+            <div>{displayStats.high24h}</div>
           </div>
           <div>
             <span className="text-gray-400">24h Low</span>
-            <div id="24h-low">—</div>
+            <div>{displayStats.low24h}</div>
           </div>
         </div>
       </div>
