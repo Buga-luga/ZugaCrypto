@@ -3,7 +3,7 @@ import { Time, IChartApi, ChartOptions, DeepPartial, LineWidth, BusinessDay, UTC
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart } from 'lightweight-charts';
 import { getHistoricalData, subscribeToPrice, Timeframe } from '@/services/api/cryptoCompareAPI';
-import { StrategyId, getStrategy } from '@/services/strategies';
+import { StrategyId, getStrategy, StrategySignal } from '@/services/strategies';
 import { 
   calculateEMA,
   calculateSMA,
@@ -89,44 +89,55 @@ export function CandlestickChart({
   }, [onPairChange]);
 
   // Function to update price stats
-  const updatePriceStats = useCallback((data: any[]) => {
-    if (data.length < 2) return;
+  const updatePriceStats = useCallback(async () => {
+    try {
+      // Get 1-minute data for accurate time-based calculations
+      const minuteData = await getHistoricalData('1m', token, currentBaseToken);
+      if (!minuteData.length) return;
 
-    const currentPrice = data[data.length - 1].close;
-    
-    // Calculate different time period changes
-    const last1h = data.slice(-1); // Last hour
-    const last24h = data.slice(-24); // Last 24 hours
-    const last7d = data.slice(-168); // Last 7 days (24 * 7)
-    
-    const high24h = Math.max(...last24h.map(d => d.high));
-    const low24h = Math.min(...last24h.map(d => d.low));
-    
-    // Calculate percentage changes
-    const getPercentChange = (periodData: any[]) => {
-      if (periodData.length < 2) return 0;
-      const oldPrice = periodData[0].close;
-      return ((currentPrice - oldPrice) / oldPrice) * 100;
-    };
+      const currentPrice = minuteData[minuteData.length - 1].close;
+      const currentTime = Math.floor(Date.now() / 1000); // Current time in seconds
+      
+      // Calculate time thresholds in seconds
+      const oneHourAgo = currentTime - (60 * 60);
+      const twentyFourHoursAgo = currentTime - (24 * 60 * 60);
+      const sevenDaysAgo = currentTime - (7 * 24 * 60 * 60);
+      
+      // Filter data for each time period
+      const last1h = minuteData.filter(d => d.time >= oneHourAgo);
+      const last24h = minuteData.filter(d => d.time >= twentyFourHoursAgo);
+      const last7d = minuteData.filter(d => d.time >= sevenDaysAgo);
+      
+      // Calculate high and low for 24h
+      const high24h = Math.max(...last24h.map(d => d.high));
+      const low24h = Math.min(...last24h.map(d => d.low));
+      
+      // Calculate percentage changes
+      const getPercentChange = (periodData: any[]) => {
+        if (periodData.length < 1) return 0;
+        const oldPrice = periodData[0].close;
+        return ((currentPrice - oldPrice) / oldPrice) * 100;
+      };
 
-    const change1h = getPercentChange(last1h);
-    const change24h = getPercentChange(last24h);
-    const change7d = getPercentChange(last7d);
-    
-    // Format prices using the price format utility
-    const formattedCurrentPrice = formatPrice(currentPrice, currentBaseToken);
-    const formattedHigh = formatPrice(high24h, currentBaseToken);
-    const formattedLow = formatPrice(low24h, currentBaseToken);
+      const change1h = getPercentChange(last1h);
+      const change24h = getPercentChange(last24h);
+      const change7d = getPercentChange(last7d);
+      
+      // Format prices using the price format utility
+      const formattedHigh = formatPrice(high24h, currentBaseToken);
+      const formattedLow = formatPrice(low24h, currentBaseToken);
 
-    setCurrentPrice(formattedCurrentPrice);
-    setPriceStats({
-      change1h: change1h.toFixed(2),
-      change24h: change24h.toFixed(2),
-      change7d: change7d.toFixed(2),
-      high24h: formattedHigh,
-      low24h: formattedLow
-    });
-  }, [currentBaseToken]);
+      setPriceStats({
+        change1h: change1h.toFixed(2),
+        change24h: change24h.toFixed(2),
+        change7d: change7d.toFixed(2),
+        high24h: formattedHigh,
+        low24h: formattedLow
+      });
+    } catch (error) {
+      console.error('Error updating price stats:', error);
+    }
+  }, [token, currentBaseToken]);
 
   // Function to add strategy indicators
   const addStrategyIndicators = useCallback((chart: IChartApi, data: any[]) => {
@@ -331,7 +342,12 @@ export function CandlestickChart({
         historicalDataRef.current = data;
         
         candlestickSeries.setData(data);
-        updatePriceStats(data);
+        updatePriceStats();
+
+        // Set the current candle reference to the last candle
+        if (data.length > 0) {
+          currentCandleRef.current = data[data.length - 1];
+        }
 
         if (strategy !== 'none') {
           addStrategyIndicators(chart, data);
@@ -345,44 +361,57 @@ export function CandlestickChart({
 
     // Real-time updates
     const unsubscribe = subscribeToPrice((data) => {
-      if (!candlestickSeriesRef.current) return;
+      if (!candlestickSeriesRef.current) {
+        console.warn('Candlestick series not initialized');
+        return;
+      }
+
+      // Update current price display immediately
+      const formattedPrice = formatPrice(data.value, currentBaseToken);
+      setCurrentPrice(formattedPrice);
 
       const intervalSeconds = getIntervalSeconds(timeframe);
       const candleTimestamp = Math.floor(data.time / intervalSeconds) * intervalSeconds;
 
-      // If this is a new candle
+      // Update chart candles
       if (!currentCandleRef.current || candleTimestamp !== currentCandleRef.current.time) {
-        // If we had a previous candle, add it to historical data and check for signals
         if (currentCandleRef.current) {
-          historicalDataRef.current = [...historicalDataRef.current, currentCandleRef.current];
-          
-          // Update strategies with the new historical data
-          if (strategy !== 'none' && chartRef.current) {
-            addStrategyIndicators(chartRef.current, historicalDataRef.current);
-          }
+          historicalDataRef.current.push(currentCandleRef.current);
         }
 
-        // Start new candle
-        currentCandleRef.current = {
-          time: candleTimestamp,
+        const newCandle = {
+          time: candleTimestamp as UTCTimestamp,
           open: data.value,
           high: data.value,
           low: data.value,
           close: data.value
         };
+
+        currentCandleRef.current = newCandle;
+        candlestickSeriesRef.current.update(newCandle);
+
+        if (strategy !== 'none' && chartRef.current) {
+          addStrategyIndicators(chartRef.current, historicalDataRef.current);
+        }
       } else {
-        // Update current candle
-        currentCandleRef.current.high = Math.max(currentCandleRef.current.high, data.value);
-        currentCandleRef.current.low = Math.min(currentCandleRef.current.low, data.value);
-        currentCandleRef.current.close = data.value;
+        const updatedCandle = {
+          ...currentCandleRef.current,
+          high: Math.max(currentCandleRef.current.high, data.value),
+          low: Math.min(currentCandleRef.current.low, data.value),
+          close: data.value
+        };
+
+        currentCandleRef.current = updatedCandle;
+        candlestickSeriesRef.current.update(updatedCandle);
       }
 
-      // Update the chart with current candle
-      candlestickSeriesRef.current.update(currentCandleRef.current);
-
-      // Update price stats with the latest data
+      // Update price stats with all available data
       if (historicalDataRef.current.length > 0) {
-        updatePriceStats([...historicalDataRef.current, currentCandleRef.current]);
+        const allData = [...historicalDataRef.current];
+        if (currentCandleRef.current) {
+          allData.push(currentCandleRef.current);
+        }
+        updatePriceStats();
       }
     }, timeframe, token, currentBaseToken);
 
@@ -402,7 +431,6 @@ export function CandlestickChart({
       window.removeEventListener('resize', handleResize);
       unsubscribe();
       
-      // Clean up indicator series
       if (chartRef.current) {
         indicatorSeriesRefs.current.forEach(series => {
           try {
@@ -434,12 +462,28 @@ export function CandlestickChart({
     }
   }, [markerSeriesRef.current]);
 
+  // Helper function to calculate indicators
+  const calculateIndicator = (prices: number[], type: string, period: number) => {
+    switch (type) {
+      case 'ema':
+        return calculateEMA(prices, period);
+      case 'sma':
+        return calculateSMA(prices, period);
+      case 'tema':
+        return calculateTEMA(prices, period);
+      case 'hma':
+        return calculateHMA(prices, period);
+      default:
+        return [];
+    }
+  };
+
   return (
     <div className="flex flex-col w-full h-full">
       <TickerHeader
         token={token}
-        baseToken={baseToken}
-        exchange={exchange}
+        baseToken={currentBaseToken}
+        exchange={selectedExchange}
         currentPrice={currentPrice}
         priceStats={priceStats}
         onExchangeChange={setSelectedExchange}

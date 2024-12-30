@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { formatPrice } from '@/utils/priceFormat';
 import { isBTCPair, DEFAULT_BTC_FORMAT, DEFAULT_USDT_FORMAT } from '@/utils/priceFormat';
+import { getHistoricalData as getCryptoCompareData } from '@/services/api/cryptoCompareAPI';
+import { getHistoricalData as getCoinGeckoData, getSupportedPairs } from '@/services/api/coinGeckoAPI';
 
 const ChevronDownIcon = () => (
   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -14,7 +16,7 @@ const CheckIcon = () => (
   </svg>
 );
 
-const exchanges = ['CryptoCompare'] as const;
+const exchanges = ['CryptoCompare', 'CoinGecko'] as const;
 
 const tradingPairs = [
   // USDT Pairs
@@ -94,21 +96,37 @@ export function TickerHeader({
   const [showPairSelector, setShowPairSelector] = useState(false);
   const [showExchangeSelector, setShowExchangeSelector] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  
-  const filteredPairs = filterPairs(tradingPairs, searchTerm);
+  const [selectedExchange, setSelectedExchange] = useState(exchange);
+  const [filteredPairs, setFilteredPairs] = useState(tradingPairs);
 
-  // Simply use the provided values, don't try to format them
-  const displayPrice = currentPrice || '0.00';
-  const displayStats = priceStats || {
-    high24h: '0.00',
-    low24h: '0.00',
-    change1h: '0.00',
-    change24h: '0.00',
-    change7d: '0.00'
+  useEffect(() => {
+    console.log('Fetching pairs due to change in selectedExchange');
+    fetchPairs(selectedExchange);
+  }, [selectedExchange]);
+
+  const fetchPairs = async (exchange: string) => {
+    try {
+      const pairs = exchange === 'CryptoCompare'
+        ? tradingPairs // Use static list for CryptoCompare
+        : await getSupportedPairs(); // Fetch pairs for CoinGecko
+      setFilteredPairs(pairs as typeof tradingPairs);
+    } catch (error) {
+      console.error('Error fetching pairs:', error);
+      // Fallback to static list on error
+      setFilteredPairs(tradingPairs);
+    }
   };
+
+  const displayedPairs = filterPairs(filteredPairs, searchTerm);
 
   const getChangeColor = (value: string) => {
     return value.startsWith('-') ? 'text-red-500' : 'text-green-500';
+  };
+
+  const handleExchangeChange = (exchange: string) => {
+    console.log('Exchange changed to:', exchange);
+    setSelectedExchange(exchange);
+    onExchangeChange(exchange);
   };
 
   return (
@@ -137,7 +155,7 @@ export function TickerHeader({
                 className="w-full px-4 py-2 bg-[#2B2B43] text-white border-b border-[#2B2B43] rounded-t-lg focus:outline-none"
               />
               <div className="max-h-96 overflow-y-auto">
-                {filteredPairs.map((pair) => (
+                {displayedPairs.map((pair) => (
                   <button
                     key={`${pair.token}/${pair.baseToken}`}
                     onClick={() => {
@@ -158,7 +176,7 @@ export function TickerHeader({
             onClick={() => setShowExchangeSelector(!showExchangeSelector)}
             className="flex items-center space-x-2 text-sm text-gray-400 hover:text-gray-300"
           >
-            <span>{exchange}</span>
+            <span>{selectedExchange}</span>
             <ChevronDownIcon />
           </button>
           {showExchangeSelector && (
@@ -167,50 +185,44 @@ export function TickerHeader({
                 <button
                   key={ex}
                   onClick={() => {
-                    onExchangeChange(ex);
+                    handleExchangeChange(ex);
                     setShowExchangeSelector(false);
                   }}
                   className="w-full px-4 py-2 text-left hover:bg-[#2B2B43] focus:outline-none flex items-center justify-between"
                 >
                   <span>{ex}</span>
-                  {ex === exchange && <CheckIcon />}
+                  {ex === selectedExchange && <CheckIcon />}
                 </button>
               ))}
             </div>
           )}
         </div>
       </div>
-      <div className="flex items-center space-x-6">
-        <div>
+      <div className="flex items-center space-x-8">
+        <div className="flex flex-col items-start">
           <span className="text-gray-400 text-sm">Price</span>
-          <div className="text-lg font-semibold">{displayPrice}</div>
+          <div className="text-2xl font-bold">{currentPrice}</div>
         </div>
         <div className="flex items-center space-x-4 text-sm">
           <div>
-            <span className="text-gray-400">1h</span>
-            <div className={getChangeColor(displayStats.change1h)}>
-              {displayStats.change1h}%
-            </div>
+            <span className="text-gray-400">24h High: </span>
+            <span>{priceStats.high24h}</span>
           </div>
           <div>
-            <span className="text-gray-400">24h</span>
-            <div className={getChangeColor(displayStats.change24h)}>
-              {displayStats.change24h}%
-            </div>
+            <span className="text-gray-400">24h Low: </span>
+            <span>{priceStats.low24h}</span>
           </div>
           <div>
-            <span className="text-gray-400">7D</span>
-            <div className={getChangeColor(displayStats.change7d)}>
-              {displayStats.change7d}%
-            </div>
+            <span className="text-gray-400">1h: </span>
+            <span className={getChangeColor(priceStats.change1h)}>{priceStats.change1h}%</span>
           </div>
           <div>
-            <span className="text-gray-400">24h High</span>
-            <div>{displayStats.high24h}</div>
+            <span className="text-gray-400">24h: </span>
+            <span className={getChangeColor(priceStats.change24h)}>{priceStats.change24h}%</span>
           </div>
           <div>
-            <span className="text-gray-400">24h Low</span>
-            <div>{displayStats.low24h}</div>
+            <span className="text-gray-400">7D: </span>
+            <span className={getChangeColor(priceStats.change7d)}>{priceStats.change7d}%</span>
           </div>
         </div>
       </div>

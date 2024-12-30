@@ -83,49 +83,60 @@ export async function getHistoricalData(timeframe: Timeframe, token: string = 'B
 }
 
 export function subscribeToPrice(callback: (data: { time: number; value: number }) => void, timeframe: Timeframe, token: string = 'BTC', baseToken: string = 'USDT'): () => void {
-  const ws = new WebSocket('wss://streamer.cryptocompare.com/v2');
-  const subscription = `5~CCCAGG~${token}~${baseToken}`;
+  let isSubscribed = true;
+  let pollInterval: NodeJS.Timeout | null = null;
+  const POLL_INTERVAL = 2000; // Poll every 2 seconds
 
-  ws.onopen = () => {
-    const subscribeMsg = {
-      "action": "SubAdd",
-      "subs": [subscription]
-    };
-    ws.send(JSON.stringify(subscribeMsg));
-  };
-
-  ws.onmessage = (event) => {
+  const fetchLatestPrice = async () => {
     try {
-      const data = JSON.parse(event.data);
-      if (data.TYPE === "5" && data.PRICE) { // Type 5 is trade
-        const price = parseFloat(data.PRICE);
+      const response = await fetch(
+        `${BASE_URL}/price?fsym=${token}&tsyms=${baseToken}&api_key=${API_KEY}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.Response === 'Error') {
+        throw new Error(data.Message);
+      }
+
+      const price = data[baseToken];
+      if (price && !isNaN(price)) {
         const timestamp = Math.floor(Date.now() / 1000);
+        console.log('Processing price update:', { time: timestamp, value: price });
         callback({ time: timestamp, value: price });
       }
     } catch (error) {
-      console.error('Error processing message:', error);
+      console.error('Error fetching price:', error);
     }
   };
 
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
+  // Start polling
+  const startPolling = () => {
+    // Fetch immediately
+    fetchLatestPrice();
+
+    // Then set up interval
+    pollInterval = setInterval(() => {
+      if (isSubscribed) {
+        fetchLatestPrice();
+      }
+    }, POLL_INTERVAL);
   };
 
-  // Keep connection alive with ping
-  const pingInterval = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ "action": "PING" }));
-    }
-  }, 15000);
+  // Start polling immediately
+  startPolling();
 
+  // Return cleanup function
   return () => {
-    clearInterval(pingInterval);
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        "action": "SubRemove",
-        "subs": [subscription]
-      }));
-      ws.close();
+    console.log('Cleaning up price subscription...');
+    isSubscribed = false;
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
     }
   };
 }
